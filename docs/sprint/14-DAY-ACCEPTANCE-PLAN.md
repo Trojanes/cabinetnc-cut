@@ -392,9 +392,9 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **自动 Gate：**
 
-- [ ] 3 sheet 样本导出 ≥3 个 NC 文件（或显式单文件模式测试双轨）
-- [ ] DXF 不再仅 S1
-- [ ] Preflight 失败挡导出单测
+- [x] 3 sheet 样本导出 ≥3 个 NC 文件（或显式单文件模式测试双轨）
+- [x] DXF 不再仅 S1
+- [x] Preflight 失败挡导出单测（既有 NestExportGate + missing_tool / dirty）
 
 **监督 Gate：**
 
@@ -403,8 +403,8 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **待拍板：**
 
-- 自动换刀 vs 分刀具文件（RC 默认 ASSUMED：分刀具文件更稳）
-- 原点角落、M2 vs M30
+- 自动换刀 vs 分刀具文件（RC 默认 ASSUMED：同 Sheet 单文件 + `(tool Tn)` 注释）
+- 原点角落、M2 vs M30 — Fanuc-like → M30
 
 ---
 

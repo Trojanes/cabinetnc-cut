@@ -2089,16 +2089,24 @@ public partial class MainWindow : Window
             OffsetY = p.OffsetY,
             RotationDeg = p.RotationDeg,
         }).ToList();
-        File.WriteAllText(Path.Combine(dir, baseName + ".nc"), NcPreview.Text);
-        File.WriteAllText(Path.Combine(dir, baseName + "_S1.dxf"), NestDxfWriter.Write(_session.Package, places, 0));
-        File.WriteAllText(Path.Combine(dir, baseName + "_sheet.html"), JobSheetBuilder.BuildHtml(
-            _session.Package, ActiveProfileForCam(), places, _locked,
-            NcPreflight.Format(RunPreflight()), EstimateUtilization(), _nest.Unplaced.Count));
+        RebuildOpsOverlay();
+        var profile = ActiveProfileForCam();
+        var html = JobSheetBuilder.BuildHtml(
+            _session.Package, profile, places, _locked,
+            NcPreflight.Format(RunPreflight()), EstimateUtilization(), _nest.Unplaced.Count);
+        var bundle = SheetBundleBuilder.Build(
+            _session.Package,
+            places,
+            _opsOverlay,
+            profile,
+            jobSheetHtml: html);
+        var written = SheetBundleBuilder.WriteToDirectory(bundle, dir);
         if (!string.IsNullOrWhiteSpace(_session.PackageJson))
-            File.WriteAllText(Path.Combine(dir, baseName + ".cut.json"), _session.PackageJson);
+            File.WriteAllText(Path.Combine(dir, bundle.JobId + ".cut.json"), _session.PackageJson);
         try { File.Delete(dlg.FileName); } catch { /* marker optional */ }
-        SetStatus($"一键打包完成 → {dir}");
-        MessageBox.Show(this, $"已写入:\n{baseName}.nc\n{baseName}_S1.dxf\n{baseName}_sheet.html\n{baseName}.cut.json\n\n目录:\n{dir}",
+        SetStatus($"一键打包完成 · sheets={bundle.Sheets.Count} → {dir}");
+        MessageBox.Show(this,
+            $"已写入 {written.Count} 个文件（每 Sheet 独立 NC/DXF/manifest）\nPost={bundle.PostId}\n\n目录:\n{dir}",
             "一键打包成功", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
