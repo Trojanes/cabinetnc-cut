@@ -297,9 +297,9 @@ docs/sprint/day-NN-report.md
 
 **自动 Gate：**
 
-- [ ] 每个生成的 Operation 都有 ToolId（或显式默认映射表）
-- [ ] 去掉某类刀具 → 导出失败并指出缺失
-- [ ] 单测覆盖绑定与缺刀
+- [x] 每个生成的 Operation 都有 ToolId（或显式默认映射表）
+- [x] 去掉某类刀具 → 导出失败并指出缺失
+- [x] 单测覆盖绑定与缺刀
 
 **监督 Gate：**
 
@@ -308,8 +308,8 @@ docs/sprint/day-NN-report.md
 
 **待拍板：**
 
-- 真实刀号/刀长/刀库位
-- 哪些孔必须钻刀、哪些可铣
+- 真实刀号/刀长/刀库位 — ASSUMED T1/T2/T3 presets
+- 哪些孔必须钻刀、哪些可铣 — ASSUMED holes→T3 drill
 
 ---
 

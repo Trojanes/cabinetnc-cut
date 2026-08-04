@@ -2,6 +2,7 @@ namespace CabinetNC.Infrastructure.Library;
 
 using System.Text.Json;
 using CabinetNC.Domain.Machines;
+using CabinetNC.Domain.Manufacturing;
 
 public static class WorkshopLibraryStore
 {
@@ -58,16 +59,28 @@ public static class WorkshopLibraryStore
                 new() { Id = "mat_mdf", Name = "mdf", ThicknessMm = 18, DensityHint = "板式" },
                 new() { Id = "mat_ply", Name = "plywood", ThicknessMm = 15, DensityHint = "多层" },
             ],
-            Tools = MachineCatalog.All.Select(p => new LibTool
-            {
-                Id = "tool_" + p.Id,
-                Name = p.Name,
-                MachineId = p.Id,
-                DiameterMm = p.ToolDiameterMm,
-                FeedXyMmMin = p.FeedXyMmMin,
-                FeedZMmMin = p.FeedZMmMin,
-                SpindleRpm = p.SpindleRpm,
-            }).ToList(),
+            Tools =
+            [
+                ..ToolCatalog.DefaultPresets.Select(t => new LibTool
+                {
+                    Id = t.ToolId,
+                    Name = t.Name,
+                    DiameterMm = t.DiameterMm,
+                    FeedXyMmMin = t.FeedXyMmMin,
+                    FeedZMmMin = t.FeedZMmMin,
+                    SpindleRpm = t.SpindleRpm,
+                }),
+                ..MachineCatalog.All.Select(p => new LibTool
+                {
+                    Id = "tool_" + p.Id,
+                    Name = p.Name,
+                    MachineId = p.Id,
+                    DiameterMm = p.ToolDiameterMm,
+                    FeedXyMmMin = p.FeedXyMmMin,
+                    FeedZMmMin = p.FeedZMmMin,
+                    SpindleRpm = p.SpindleRpm,
+                }),
+            ],
             Nest = new NestDefaults(),
         };
         return lib;
@@ -84,6 +97,21 @@ public static class WorkshopLibraryStore
             var d = CreateDefault();
             if (lib.Materials.Count == 0) lib.Materials = d.Materials;
             if (lib.Tools.Count == 0) lib.Tools = d.Tools;
+        }
+        // Ensure Day-7 presets exist even on older library.json
+        foreach (var preset in ToolCatalog.DefaultPresets)
+        {
+            if (lib.Tools.Any(t => t.Id.Equals(preset.ToolId, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            lib.Tools.Insert(0, new LibTool
+            {
+                Id = preset.ToolId,
+                Name = preset.Name,
+                DiameterMm = preset.DiameterMm,
+                FeedXyMmMin = preset.FeedXyMmMin,
+                FeedZMmMin = preset.FeedZMmMin,
+                SpindleRpm = preset.SpindleRpm,
+            });
         }
         return lib;
     }

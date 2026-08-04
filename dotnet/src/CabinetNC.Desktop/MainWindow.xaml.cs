@@ -793,7 +793,9 @@ public partial class MainWindow : Window
                 ParseMm(CamOffsetBox.Text, ActiveProfileForCam().ToolDiameterMm / 2));
         OpsMeta.Text =
             $"ops {_opsOverlay.Count} · contour={_opsOverlay.Count(o => o.Op == "contour")} " +
-            $"drill={_opsOverlay.Count(o => o.Op == "drill")} groove={_opsOverlay.Count(o => o.Op == "groove")}";
+            $"drill={_opsOverlay.Count(o => o.Op == "drill")} groove={_opsOverlay.Count(o => o.Op == "groove")} · " +
+            string.Join(" ", _opsOverlay.Where(o => o.Placed).GroupBy(o => o.ToolId ?? "?")
+                .Select(g => $"{g.Key}×{g.Count()}"));
         RefreshOpsListBox();
         RefreshCamFrames();
         RefreshPreflightMeta();
@@ -802,7 +804,7 @@ public partial class MainWindow : Window
     void RefreshOpsListBox()
     {
         OpsListBox.Items.Clear();
-        foreach (var g in _opsOverlay.GroupBy(o => o.Op))
+        foreach (var g in _opsOverlay.GroupBy(o => $"{o.Op}/{o.ToolId ?? "NO_TOOL"}"))
             OpsListBox.Items.Add($"{g.Key} × {g.Count()} (placed {g.Count(x => x.Placed)})");
         if (OpsListBox.Items.Count == 0)
             OpsListBox.Items.Add("无工序");

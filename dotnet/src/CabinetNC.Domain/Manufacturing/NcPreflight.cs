@@ -49,6 +49,13 @@ public static class NcPreflight
         if (profile.ToolDiameterMm <= 0)
             issues.Add(new("warn", "no_tool", "刀径为 0"));
 
+        var missingTools = ToolBinder.MissingToolIds(placed);
+        if (missingTools.Count > 0)
+        {
+            issues.Add(new("error", "missing_tool_id",
+                $"缺少刀具绑定 ToolId ×{missingTools.Count}: " + string.Join(", ", missingTools.Take(8))));
+        }
+
         var ok = issues.All(i => i.Level != "error");
         return new PreflightReport { Ok = ok, Issues = issues };
     }

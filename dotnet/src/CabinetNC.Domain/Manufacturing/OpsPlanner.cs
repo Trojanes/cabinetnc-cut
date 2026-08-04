@@ -2,7 +2,7 @@ namespace CabinetNC.Domain.Manufacturing;
 
 public sealed record CutOp
 {
-    public required string Op { get; init; } // contour | drill | groove
+    public required string Op { get; init; } // contour | drill | groove | pocket
     public required string PanelId { get; init; }
     public string? FeatureId { get; init; }
     public bool Placed { get; init; }
@@ -16,8 +16,15 @@ public sealed record CutOp
     public double? SheetY { get; init; }
     public double? DiameterMm { get; init; }
     public double? DepthMm { get; init; }
+    public double? StepdownMm { get; init; }
     public IReadOnlyList<(double X, double Y)>? Path { get; init; }
     public Nesting.LocalBounds? PanelBounds { get; init; }
+    /// <summary>Bound tool — required for export (Day 7).</summary>
+    public string? ToolId { get; init; }
+    /// <summary>A | B face.</summary>
+    public string? Side { get; init; }
+    public int SequenceGroup { get; init; }
+    public bool Enabled { get; init; } = true;
 }
 
 /// <summary>Port of src/ops.js featuresToOps + attachOpsToNest (contour + drill + groove).</summary>
@@ -98,10 +105,9 @@ public static class OpsPlanner
             }
         }
 
-        return ops
+        return ToolBinder.BindAll(ops
             .OrderBy(o => o.PanelId, StringComparer.Ordinal)
-            .ThenBy(o => Rank.GetValueOrDefault(o.Op, 9))
-            .ToList();
+            .ThenBy(o => Rank.GetValueOrDefault(o.Op, 9)));
     }
 
     public static IReadOnlyList<CutOp> AttachToNest(IEnumerable<CutOp> ops, IEnumerable<Nesting.NestPlacement> placements)
