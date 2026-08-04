@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CabinetNC Cut</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <!-- MakerHub-depth shell: top · stages · tree · canvas · inspector · status -->
+    <div class="app">
+      <header class="top">
+        <div class="brand-block">
+          <div class="brand">CabinetNC Cut</div>
+          <p class="tagline">切割站 · 深度对标 MakerHub</p>
+        </div>
+        <div class="actions">
+          <label class="file-btn">
+            Import
+            <input
+              id="fileInput"
+              type="file"
+              accept="application/json,.json,.cut.json,.dxf,.svg,image/svg+xml,image/vnd.dxf"
+              multiple
+              hidden
+            />
+          </label>
+          <button type="button" id="importFolderBtn" title="选文件夹并监视新文件">文件夹监视</button>
+          <button type="button" id="loadDemoBtn">Demo</button>
+          <button type="button" id="loadUnplacedBtn">Unplaced</button>
+          <button type="button" id="repackBtn" disabled>Repack</button>
+          <button type="button" id="saveProjectBtn" disabled>Save Project</button>
+          <label class="nest-opt">
+            机型
+            <select id="machineSelect"></select>
+          </label>
+        </div>
+      </header>
+
+      <nav class="workflow" aria-label="工作流阶段">
+        <button type="button" class="stage-tab active" data-stage="geom" id="viewGeomBtn">
+          <span class="n">1</span> 几何
+        </button>
+        <button type="button" class="stage-tab" data-stage="nest" id="viewNestBtn">
+          <span class="n">2</span> 排版
+        </button>
+        <button type="button" class="stage-tab" data-stage="cam" id="viewCamBtn">
+          <span class="n">3</span> 刀路
+        </button>
+        <button type="button" class="stage-tab" data-stage="out" id="viewOutBtn">
+          <span class="n">4</span> 输出
+        </button>
+        <div class="workflow-meta">
+          <div id="workflowProgress" class="wf-progress" aria-label="阶段进度"></div>
+          <div id="workflowMeta">geom → nest → ops → nc</div>
+        </div>
+      </nav>
+
+      <aside class="rail-left">
+        <section>
+          <h2>工程树</h2>
+          <div id="projectTree" class="tree empty">尚未加载</div>
+          <h2 style="margin-top: 8px">最近工程</h2>
+          <ul id="recentList" class="list"></ul>
+          <button type="button" id="clearRecentBtn" style="margin-top: 4px; width: 100%">清空最近</button>
+        </section>
+        <section>
+          <h2>板件</h2>
+          <ul id="panelList" class="list"></ul>
+        </section>
+        <section>
+          <h2>告警</h2>
+          <ul id="warnList" class="list warn"></ul>
+        </section>
+        <section id="libraryRail">
+          <h2>材料库</h2>
+          <ul id="materialLibList" class="library-list"></ul>
+          <div class="prop-grid" style="margin-top: 4px">
+            <label>
+              名
+              <input id="matNameInput" type="text" placeholder="oak" />
+            </label>
+            <label>
+              厚 mm
+              <input id="matThickInput" type="number" value="18" min="1" step="1" />
+            </label>
+          </div>
+          <button type="button" id="matAddBtn" style="margin-top: 4px; width: 100%">+ 材料</button>
+          <h2 style="margin-top: 10px">刀具库</h2>
+          <ul id="toolLibList" class="library-list"></ul>
+          <div class="prop-grid" style="margin-top: 4px">
+            <label>
+              Ø mm
+              <input id="toolDiaInput" type="number" min="0.1" step="0.1" value="12" />
+            </label>
+            <label>
+              S rpm
+              <input id="toolRpmInput" type="number" min="0" step="100" value="18000" />
+            </label>
+            <label>
+              Fxy
+              <input id="toolFeedXyInput" type="number" min="0" step="100" value="3000" />
+            </label>
+            <label>
+              Fz
+              <input id="toolFeedZInput" type="number" min="0" step="50" value="500" />
+            </label>
+          </div>
+          <div class="geom-actions" style="margin-top: 4px">
+            <button type="button" id="toolSaveBtn">保存刀具</button>
+            <button type="button" id="toolApplyBtn">应用到机型</button>
+          </div>
+        </section>
+      </aside>
+
+      <main class="stage">
+        <div class="stage-bar">
+          <label id="sheetLabel" style="display: none">
+            板材
+            <select id="sheetSelect"></select>
+          </label>
+          <label
+            id="overlapLabel"
+            class="nest-opt"
+            style="display: none"
+            title="不勾选：拖动可穿过；放下时若重叠则还原"
+          >
+            <input type="checkbox" id="allowOverlapChk" />
+            允许重叠
+          </label>
+          <button type="button" id="lockPlaceBtn" style="display: none">锁定摆位</button>
+          <span id="stageHint" class="hint">几何: 拖孔/槽/边手柄</span>
+        </div>
+        <canvas id="nestCanvas" width="1200" height="800"></canvas>
+        <pre id="outPreview" class="out-preview" hidden></pre>
+      </main>
+
+      <aside class="rail-right">
+        <section>
+          <h2>包信息</h2>
+          <div id="metaBox" class="meta empty">尚未加载</div>
+        </section>
+
+        <section id="materialSection" hidden>
+          <h2>材料 / 板材</h2>
+          <div id="materialMeta" class="meta empty">—</div>
+          <div class="prop-grid" style="margin-top: 6px">
+            <label>
+              板宽 mm
+              <input type="number" id="stockWidth" min="100" max="5000" step="1" value="1220" />
+            </label>
+            <label>
+              板长 mm
+              <input type="number" id="stockLength" min="100" max="6000" step="1" value="2440" />
+            </label>
+            <label>
+              厚度 mm
+              <input type="number" id="stockThick" min="1" max="100" step="0.5" value="18" />
+            </label>
+            <label>
+              材料
+              <input type="text" id="stockMaterial" placeholder="oak" />
+            </label>
+          </div>
+          <button type="button" id="applyStockBtn" style="margin-top: 6px" disabled>
+            应用板材并重排
+          </button>
+          <div class="prop-grid" style="margin-top: 8px">
+            <label>
+              间距 mm
+              <input type="number" id="nestSpacing" min="0" max="100" step="1" value="12" />
+            </label>
+            <label>
+              边距 mm
+              <input type="number" id="nestBorder" min="0" max="100" step="1" value="15" />
+            </label>
+          </div>
+          <label class="nest-opt" style="margin-top: 6px">
+            <input type="checkbox" id="nestAllowRotChk" />
+            允许旋转排版
+          </label>
+          <label style="display: block; margin-top: 6px; font-size: 11px; color: #555">
+            排版引擎
+            <select id="nestEngineSelect" style="width: 100%; margin-top: 2px">
+              <option value="auto">auto（BLF/shelf 择优）</option>
+              <option value="blf">BLF only</option>
+              <option value="shelf">shelf only</option>
+              <option value="poly">poly（轮廓碰撞 spike）</option>
+            </select>
+          </label>
+          <div class="geom-actions" style="margin-top: 6px">
+            <button type="button" id="lockAllBtn">全部锁定</button>
+            <button type="button" id="unlockAllBtn">全部解锁</button>
+          </div>
+          <button type="button" id="applyNestSettingsBtn" style="margin-top: 6px" disabled>
+            应用并重排
+          </button>
+          <button type="button" id="nestVerifyBtn" style="margin-top: 6px">
+            Clipper/轮廓校验
+          </button>
+        </section>
+
+        <section id="nestReportSection" hidden>
+          <h2>排版报告</h2>
+          <div id="nestReportMeta" class="meta empty">—</div>
+          <ul id="nestUnplacedList" class="list warn"></ul>
+        </section>
+
+        <section id="toolLibSection" hidden>
+          <h2>刀具 / 机型</h2>
+          <div id="toolLibMeta" class="meta empty">—</div>
+        </section>
+
+        <section id="camParamsSection" hidden>
+          <h2>刀路参数</h2>
+          <div class="prop-grid">
+            <label>
+              安全 Z mm
+              <input type="number" id="camSafeZ" min="0" max="200" step="0.5" value="5" />
+            </label>
+            <label>
+              轮廓深 mm
+              <input type="number" id="camContourDepth" min="0" max="100" step="0.5" value="18" />
+            </label>
+            <label>
+              分层 mm
+              <input type="number" id="camStepdown" min="0" max="50" step="0.5" value="0" title="0=一次切到底" />
+            </label>
+            <label>
+              啄钻 mm
+              <input type="number" id="camPeck" min="0" max="50" step="0.5" value="0" title="0=一次钻到底" />
+            </label>
+          </div>
+          <label class="nest-opt" style="margin-top: 6px">
+            <input type="checkbox" id="camOffsetChk" checked />
+            轮廓刀补（内缩）
+          </label>
+          <label class="nest-opt">
+            <input type="checkbox" id="camEnableContour" checked />
+            输出轮廓
+          </label>
+          <label class="nest-opt">
+            <input type="checkbox" id="camEnableDrill" checked />
+            输出钻孔
+          </label>
+          <label class="nest-opt">
+            <input type="checkbox" id="camEnableGroove" checked />
+            输出拉槽
+          </label>
+          <button type="button" id="camApplyBtn" style="margin-top: 6px">应用刀路参数</button>
+          <div id="camParamsHint" class="meta empty" style="margin-top: 4px">影响 NC 预览与导出</div>
+          <div class="geom-actions" style="margin-top: 8px">
+            <button type="button" id="camSimPrevBtn" title="上一步">◀</button>
+            <button type="button" id="camSimPlayBtn" title="播放/暂停">▶</button>
+            <button type="button" id="camSimNextBtn" title="下一步">▶|</button>
+          </div>
+          <div id="camSimMeta" class="meta empty" style="margin-top: 4px">模拟 —</div>
+        </section>
+
+        <section id="geomToolsSection">
+          <h2>几何 (选中板)</h2>
+          <div id="geomMeta" class="meta empty">选板后可编辑</div>
+          <div class="geom-actions">
+            <button type="button" id="geomMoveBtn" disabled>Move+10</button>
+            <button type="button" id="geomRotBtn" disabled>Rot90</button>
+            <button type="button" id="geomHoleBtn" disabled>+Hole</button>
+            <button type="button" id="geomGrooveBtn" disabled>+Groove</button>
+            <button type="button" id="geomNewBtn">NewRect</button>
+          </div>
+          <label class="nest-opt" style="margin-top: 8px">
+            <input type="checkbox" id="toolpathChk" />
+            刀路预览
+          </label>
+          <label class="nest-opt" style="margin-top: 4px">
+            <input type="checkbox" id="holeBoolChk" />
+            孔布尔预览
+          </label>
+          <label class="nest-opt" style="margin-top: 4px">
+            刀补Δ
+            <input
+              type="number"
+              id="toolpathDelta"
+              value="-6"
+              min="-50"
+              max="50"
+              step="1"
+              style="width: 52px"
+            />
+            mm
+          </label>
+          <div id="toolpathMeta" class="meta empty" style="margin-top: 4px">—</div>
+        </section>
+
+        <section id="featSection">
+          <h2>选中特征</h2>
+          <ul id="featList" class="list"></ul>
+        </section>
+        <section id="opsSection">
+          <h2>加工意图 ops</h2>
+          <ul id="opsList" class="list"></ul>
+        </section>
+        <section id="outActionsSection" hidden>
+          <h2>后置 / 导出</h2>
+          <div class="prop-grid">
+            <label>
+              方言
+              <select id="postDialect">
+                <option value="generic">generic</option>
+                <option value="fanuc_like">fanuc_like</option>
+              </select>
+            </label>
+            <label>
+              程序结束
+              <select id="postProgramEnd">
+                <option value="M2">M2</option>
+                <option value="M30">M30</option>
+              </select>
+            </label>
+          </div>
+          <label style="display: block; margin-top: 6px; font-size: 11px; color: #555">
+            原点备注
+            <input id="postOriginNote" type="text" placeholder="e.g. fixture A / G54" style="width: 100%; margin-top: 2px" />
+          </label>
+          <button type="button" id="postApplyBtn" style="margin-top: 6px">应用后置</button>
+          <div id="preflightMeta" class="meta empty" style="margin-top: 6px">预检 —</div>
+          <div class="geom-actions" style="margin-top: 10px">
+            <button type="button" id="exportBtn" disabled>Export JSON</button>
+            <button type="button" id="exportOpsBtn" disabled>Export Ops</button>
+            <button type="button" id="exportNcBtn" disabled>Export NC</button>
+            <button type="button" id="exportDxfBtn" disabled>Export DXF</button>
+            <button type="button" id="exportJobBtn" disabled>Job Sheet</button>
+          </div>
+          <p class="hint" style="margin-top: 8px">
+            预览下方 NC；确认后点 Export NC 下载。<br />
+            桌面便携包：仓库根目录运行 <code>npm run portable</code>，再双击
+            <code>portable/start.bat</code>。Tauri 原生壳仍为 spike（见
+            <code>desktop/tauri-intent.json</code>）。
+          </p>
+        </section>
+      </aside>
+
+      <footer class="status-bar">
+        <span id="statusLeft" class="muted">就绪</span>
+        <span id="statusRight" class="muted">CabinetNC Cut</span>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

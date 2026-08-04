@@ -1,0 +1,487 @@
+﻿<Window x:Class="CabinetNC.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:skia="clr-namespace:SkiaSharp.Views.WPF;assembly=SkiaSharp.Views.WPF"
+        Title="CabinetNC Cut"
+        Width="1360" Height="860"
+        MinWidth="1024" MinHeight="680"
+        Background="#F0F0F0"
+        FontFamily="Segoe UI">
+  <Window.Resources>
+    <Style TargetType="Button">
+      <Setter Property="Padding" Value="10,5" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#AAAAAA" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Padding" Value="4,3" />
+      <Setter Property="BorderBrush" Value="#AAAAAA" />
+    </Style>
+    <Style x:Key="RailH2" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="#666666" />
+      <Setter Property="Margin" Value="0,10,0,4" />
+    </Style>
+    <Style x:Key="ModuleBtn" TargetType="Button">
+      <Setter Property="Padding" Value="8,12" />
+      <Setter Property="Margin" Value="0,0,0,4" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Foreground" Value="#DDDDDD" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+  </Window.Resources>
+
+  <DockPanel>
+    <!-- Top chrome -->
+    <Border DockPanel.Dock="Top" Padding="12,8" BorderBrush="#B8B8B8" BorderThickness="0,0,0,1" Background="#FAFAFA">
+      <Grid>
+        <StackPanel VerticalAlignment="Center">
+          <TextBlock Text="CabinetNC Cut" FontSize="15" FontWeight="Bold" />
+          <TextBlock Text="切割站 · 生产加工" FontSize="11" Foreground="#666" />
+        </StackPanel>
+        <WrapPanel HorizontalAlignment="Right" VerticalAlignment="Center">
+          <Button Content="打开方案…" Click="OnOpenClick" />
+          <Button Content="打开工程…" Click="OnOpenProjectClick" />
+          <Button Content="保存工程" Click="OnSaveProjectClick" />
+          <Button Content="Ping" Click="OnPingClick" />
+        </WrapPanel>
+      </Grid>
+    </Border>
+
+    <Border DockPanel.Dock="Bottom" Padding="12,7" Background="#E8E8E8" BorderBrush="#C8C8C8" BorderThickness="0,1,0,0">
+      <Grid>
+        <TextBlock x:Name="StatusText" Text="Ready" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,220,0" FontSize="12" />
+        <TextBlock x:Name="WorkerBadge" Text="Worker: —" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" FontSize="12" />
+      </Grid>
+    </Border>
+
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="112" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+
+      <!-- Left module rail (MakerHub) -->
+      <Border Grid.Column="0" Background="#1B2A41" Padding="6,10">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel>
+            <Button x:Name="ModProductionBtn" Style="{StaticResource ModuleBtn}" Content="生产加工" Tag="production" Click="OnModuleClick" />
+            <Button x:Name="ModRemnantsBtn" Style="{StaticResource ModuleBtn}" Content="补板库" Tag="remnants" Click="OnModuleClick" />
+            <Button x:Name="ModEquipmentBtn" Style="{StaticResource ModuleBtn}" Content="设备管理" Tag="equipment" Click="OnModuleClick" />
+            <Button x:Name="ModRoutesBtn" Style="{StaticResource ModuleBtn}" Content="路线管理" Tag="routes" Click="OnModuleClick" />
+            <Button x:Name="ModMaterialsBtn" Style="{StaticResource ModuleBtn}" Content="原料管理" Tag="materials" Click="OnModuleClick" />
+            <Button x:Name="ModProcessBtn" Style="{StaticResource ModuleBtn}" Content="工艺模版" Tag="process" Click="OnModuleClick" />
+            <Button x:Name="ModSettingsBtn" Style="{StaticResource ModuleBtn}" Content="参数设置" Tag="settings" Click="OnModuleClick" />
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+
+      <!-- Module bodies -->
+      <Grid Grid.Column="1">
+        <!-- ===== 生产加工 ===== -->
+        <DockPanel x:Name="ProductionHost">
+          <!-- Workflow chevron -->
+          <Border DockPanel.Dock="Top" Background="#DDDDDD" BorderBrush="#B8B8B8" BorderThickness="0,0,0,1">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TabControl x:Name="StageTabs" Background="Transparent" BorderThickness="0" SelectionChanged="OnStageChanged">
+                <TabControl.Resources>
+                  <Style TargetType="TabItem">
+                    <Setter Property="Padding" Value="14,10" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="Foreground" Value="#444444" />
+                    <Setter Property="Template">
+                      <Setter.Value>
+                        <ControlTemplate TargetType="TabItem">
+                          <Border x:Name="Bd" Padding="{TemplateBinding Padding}" Background="Transparent"
+                                  BorderThickness="0,0,1,0" BorderBrush="#BBBBBB">
+                            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                          </Border>
+                          <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                              <Setter TargetName="Bd" Property="Background" Value="White" />
+                              <Setter TargetName="Bd" Property="BorderThickness" Value="0,0,1,2" />
+                              <Setter TargetName="Bd" Property="BorderBrush" Value="#2277CC" />
+                              <Setter Property="Foreground" Value="#111111" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                              <Setter Property="Foreground" Value="#999999" />
+                              <Setter TargetName="Bd" Property="Opacity" Value="0.55" />
+                            </Trigger>
+                          </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                      </Setter.Value>
+                    </Setter>
+                  </Style>
+                </TabControl.Resources>
+                <TabItem x:Name="TabLoad" Tag="load" Header="1 载入方案" />
+                <TabItem x:Name="TabStock" Tag="stock" Header="2 板材与设备" />
+                <TabItem x:Name="TabNest" Tag="nest" Header="3 密排" />
+                <TabItem x:Name="TabOps" Tag="ops" Header="4 刀路与加工档" />
+                <TabItem x:Name="TabOut" Tag="out" Header="5 导出" />
+              </TabControl>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                <StackPanel x:Name="WfDots" Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center" />
+                <Button x:Name="OneClickExportBtn" Content="一键导出" Click="OnOneClickExportClick" IsEnabled="False" Padding="12,6" />
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <Border DockPanel.Dock="Top" Background="#FAFAFA" Padding="10,6" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1">
+            <Grid>
+              <TextBlock x:Name="StageHint" Text="先载入 woodjob / cut-package 方案" Foreground="#666" FontSize="12" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <CheckBox x:Name="AllowOverlapChk" Content="允许重叠" VerticalAlignment="Center" Margin="0,0,12,0"
+                          Visibility="Collapsed" FontSize="12" />
+                <Button x:Name="LockPlaceBtn" Content="锁定摆位" Click="OnLockPlaceClick" Visibility="Collapsed" Padding="8,3" />
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="200" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition x:Name="NcCol" Width="300" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="#F7F7F7" BorderBrush="#C8C8C8" BorderThickness="0,0,1,0" Padding="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                  <TextBlock Text="工程" Style="{StaticResource RailH2}" Margin="0,0,0,4" />
+                  <TextBlock x:Name="PackageMeta" Text="尚未加载" TextWrapping="Wrap" FontSize="12" Foreground="#888" Margin="0,0,0,8" />
+                  <TextBlock Text="板件" Style="{StaticResource RailH2}" />
+                  <ListBox x:Name="PartList" BorderThickness="0" Background="Transparent" SelectionChanged="OnPartSelected" FontSize="12" />
+                  <TextBlock Text="告警" Style="{StaticResource RailH2}" />
+                  <ListBox x:Name="WarnList" BorderThickness="0" Background="Transparent" FontSize="11" Foreground="#886644" />
+                </StackPanel>
+              </ScrollViewer>
+            </Border>
+
+            <Border x:Name="CanvasPane" Grid.Column="1" Background="White"
+                    PreviewMouseLeftButtonDown="OnCanvasDown"
+                    PreviewMouseMove="OnCanvasMove"
+                    PreviewMouseLeftButtonUp="OnCanvasUp"
+                    LostMouseCapture="OnCanvasLostCapture">
+              <Grid>
+                <skia:SKElement x:Name="CanvasHost" PaintSurface="OnPaintSurface" />
+                <TextBlock x:Name="CanvasHint" Visibility="Collapsed" IsHitTestVisible="False"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           FontSize="14" Foreground="#888" />
+                <!-- Empty state (no package) -->
+                <Border x:Name="EmptyState" Background="#FFFFFF" Visibility="Visible">
+                  <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420">
+                    <TextBlock Text="尚未载入方案" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" />
+                    <TextBlock Text="打开 cabinetnc.woodjob（.zip）或 cut-package JSON，再进入板材 / 密排 / 加工档。"
+                               TextWrapping="Wrap" TextAlignment="Center" Foreground="#666" Margin="0,0,0,16" FontSize="12" />
+                    <WrapPanel HorizontalAlignment="Center">
+                      <Button x:Name="EmptyLoadBtn" Content="载入方案…" Click="OnOpenClick" Padding="14,8" Margin="0,0,8,0" />
+                      <Button x:Name="EmptyDemoBtn" Content="打开示例" Click="OnLoadDemoClick" Padding="14,8" />
+                    </WrapPanel>
+                  </StackPanel>
+                </Border>
+              </Grid>
+            </Border>
+
+            <!-- Geom rail (载入后检视/编辑) -->
+            <Border x:Name="GeomPane" Grid.Column="2" Background="#F7F7F7" BorderBrush="#C8C8C8" BorderThickness="1,0,0,0" Padding="10" Visibility="Collapsed">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                  <TextBlock Text="检视 / 编辑" Style="{StaticResource RailH2}" Margin="0" />
+                  <TextBlock x:Name="GeomMeta" Text="选板后可编辑" TextWrapping="Wrap" FontSize="12" Foreground="#555" Margin="0,0,0,8" />
+                  <WrapPanel Margin="0,0,0,8">
+                    <Button Content="特征→10" Click="OnGeomMoveClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="旋转90°" Click="OnGeomRotClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="+孔⌀8" Click="OnGeomHoleClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="+槽" Click="OnGeomGrooveClick" Padding="8,4" Margin="0,0,4,4" />
+                  </WrapPanel>
+                  <TextBlock Text="特征" Style="{StaticResource RailH2}" />
+                  <ListBox x:Name="FeatList" BorderThickness="0" Background="Transparent" FontSize="12" MinHeight="60" />
+                </StackPanel>
+              </ScrollViewer>
+            </Border>
+
+            <!-- Stock / nest rail -->
+            <Border x:Name="NestPane" Grid.Column="2" Background="#F7F7F7" BorderBrush="#C8C8C8" BorderThickness="1,0,0,0" Padding="10" Visibility="Collapsed">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                  <TextBlock x:Name="NestPaneTitle" Text="板材 / 密排参数" Style="{StaticResource RailH2}" Margin="0" />
+                  <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" /><ColumnDefinition Width="6" /><ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                      <TextBlock Text="板宽 mm" FontSize="11" Foreground="#555" />
+                      <TextBox x:Name="StockWidthBox" Text="1220" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                      <TextBlock Text="板长 mm" FontSize="11" Foreground="#555" />
+                      <TextBox x:Name="StockLengthBox" Text="2440" />
+                    </StackPanel>
+                  </Grid>
+                  <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" /><ColumnDefinition Width="6" /><ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                      <TextBlock Text="间距 mm" FontSize="11" Foreground="#555" />
+                      <TextBox x:Name="NestSpacingBox" Text="12" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                      <TextBlock Text="边距 mm" FontSize="11" Foreground="#555" />
+                      <TextBox x:Name="NestBorderBox" Text="15" />
+                    </StackPanel>
+                  </Grid>
+                  <CheckBox x:Name="NestAllowRotChk" Content="允许旋转排版" IsChecked="True" Margin="0,2,0,8" FontSize="12" />
+                  <TextBlock Text="机型" FontSize="11" Foreground="#555" />
+                  <ComboBox x:Name="MachineCombo" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="0,0,0,8" />
+                  <Button x:Name="NestApplyBtn" Content="应用并重排" Click="OnApplyNestSettingsClick" HorizontalAlignment="Stretch" Margin="0,0,0,4" />
+                  <Button x:Name="NestNcBtn" Content="密排 + 生成加工档" Click="OnNestClick" HorizontalAlignment="Stretch" Margin="0,0,0,12" />
+                  <Button x:Name="NestVerifyPolyBtn" Content="Clipper2 多边形校验" Click="OnNestVerifyPolyClick"
+                          HorizontalAlignment="Stretch" Margin="0,0,0,12" />
+                  <TextBlock Text="排版报告" Style="{StaticResource RailH2}" />
+                  <TextBlock x:Name="NestReportMeta" Text="尚未排版" TextWrapping="Wrap" FontFamily="Consolas" FontSize="12" Foreground="#444" Margin="0,0,0,6" />
+                  <ListBox x:Name="NestUnplacedList" BorderThickness="0" Background="Transparent" FontSize="11" />
+                </StackPanel>
+              </ScrollViewer>
+            </Border>
+
+            <Border x:Name="NcPane" Grid.Column="2" Background="#1E1E1E" BorderBrush="#C8C8C8" BorderThickness="1,0,0,0" Visibility="Collapsed">
+              <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="10,8,10,4">
+                  <TextBlock x:Name="NcPaneTitle" Text="刀路 / NC" Foreground="#CFCFCF" FontWeight="SemiBold" />
+                  <TextBlock x:Name="OpsMeta" Text="" Foreground="#888" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap" />
+                  <ListBox x:Name="OpsListBox" Height="90" Margin="0,6,0,0" FontSize="11"
+                           Background="#252526" Foreground="#CCCCCC" BorderThickness="0" Visibility="Collapsed" />
+                  <StackPanel x:Name="CamSimPanel" Visibility="Collapsed" Margin="0,6,0,0">
+                    <StackPanel Orientation="Horizontal">
+                      <Button Content="◀" Click="OnCamPrevClick" Padding="7,3" />
+                      <Button x:Name="CamPlayBtn" Content="播放" Click="OnCamPlayClick" Padding="7,3" />
+                      <Button Content="▶" Click="OnCamNextClick" Padding="7,3" />
+                    </StackPanel>
+                    <TextBlock x:Name="CamSimMeta" Foreground="#CCCCCC" FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                      <CheckBox x:Name="CamOffsetChk" Content="轮廓刀补" Foreground="#CCCCCC"
+                                Click="OnCamOffsetChanged" VerticalAlignment="Center" Margin="0,0,6,0" />
+                      <TextBox x:Name="CamOffsetBox" Text="3" Width="44" ToolTip="外偏 mm" />
+                      <TextBlock Text="mm" Foreground="#AAAAAA" VerticalAlignment="Center" Margin="3,0,0,0" />
+                    </StackPanel>
+                  </StackPanel>
+                  <TextBlock x:Name="PreflightMeta" Foreground="#AAAAAA" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" />
+                  <WrapPanel x:Name="OutExportPanel" Margin="0,8,0,0" Visibility="Collapsed">
+                    <Button x:Name="OutPreflightBtn" Content="预检" Click="OnPreflightClick" Margin="0,0,6,4" />
+                    <Button x:Name="OutSaveNcBtn" Content="导出 NC…" Click="OnSaveNcClick" Margin="0,0,6,4" />
+                    <Button x:Name="OutDxfBtn" Content="导出 DXF…" Click="OnExportDxfClick" Margin="0,0,6,4" />
+                    <Button x:Name="OutJobSheetBtn" Content="导出工单…" Click="OnExportJobSheetClick" Margin="0,0,6,4" />
+                    <Button x:Name="OutJsonBtn" Content="导出 JSON…" Click="OnExportJsonClick" Margin="0,0,6,4" />
+                    <Button x:Name="OutBundleBtn" Content="一键打包…" Click="OnExportBundleClick" Margin="0,0,6,4" />
+                  </WrapPanel>
+                </StackPanel>
+                <TextBox x:Name="NcPreview" IsReadOnly="True" AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" FontSize="12"
+                         Background="#1E1E1E" Foreground="#D4D4D4" BorderThickness="0" Margin="6" />
+              </DockPanel>
+            </Border>
+          </Grid>
+        </DockPanel>
+
+        <!-- ===== 补板库 ===== -->
+        <Border x:Name="RemnantsHost" Background="#F7F7F7" Visibility="Collapsed" Padding="16">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+              <TextBlock Text="补板库" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4" />
+              <TextBlock Text="余料 / 补板登记。可从当前板材规格快速添加，或手工录入。"
+                         TextWrapping="Wrap" Foreground="#666" FontSize="12" />
+              <TextBlock x:Name="RemnantsMeta" Margin="0,8,0,0" FontFamily="Consolas" FontSize="12" />
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+              <TextBlock Text="登记补板" FontWeight="SemiBold" Margin="0,0,0,6" />
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="RemWBox" ToolTip="宽 mm" Text="600" />
+                <TextBox Grid.Column="2" x:Name="RemLBox" ToolTip="长 mm" Text="400" />
+                <TextBox Grid.Column="4" x:Name="RemTBox" ToolTip="厚 mm" Text="18" />
+                <TextBox Grid.Column="6" x:Name="RemMatBox" ToolTip="材料" Text="" />
+              </Grid>
+              <WrapPanel Margin="0,8,0,0">
+                <Button Content="添加补板" Click="OnRemnantAddClick" />
+                <Button Content="从当前板材添加" Click="OnRemnantFromSheetClick" />
+                <Button Content="切换参与密排" Click="OnRemnantToggleNestClick" />
+                <Button Content="删除选中" Click="OnRemnantDeleteClick" />
+                <Button Content="保存库" Click="OnLibrarySaveClick" />
+              </WrapPanel>
+            </StackPanel>
+            <ListBox x:Name="RemnantsList" FontSize="12" />
+          </DockPanel>
+        </Border>
+
+        <!-- ===== 设备管理 ===== -->
+        <Border x:Name="EquipmentHost" Background="#F7F7F7" Visibility="Collapsed" Padding="16">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+              <TextBlock Text="设备管理" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4" />
+              <TextBlock Text="后置机型目录。选中后用于 Nest / NC 输出。"
+                         TextWrapping="Wrap" Foreground="#666" FontSize="12" />
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+              <TextBlock Text="当前机型" FontSize="11" Foreground="#555" />
+              <ComboBox x:Name="MachineComboModule" DisplayMemberPath="Name" SelectedValuePath="Id" Width="320"
+                        HorizontalAlignment="Left" SelectionChanged="OnMachineModuleChanged" Margin="0,0,0,8" />
+              <Button Content="应用到生产加工" Click="OnEquipmentApplyClick" HorizontalAlignment="Left" />
+            </StackPanel>
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <ListBox x:Name="EquipmentList" FontSize="12" SelectionChanged="OnEquipmentListChanged" />
+              <TextBox Grid.Column="1" x:Name="EquipmentDetail" IsReadOnly="True" AcceptsReturn="True"
+                       FontFamily="Consolas" FontSize="12" Margin="12,0,0,0" BorderThickness="1"
+                       VerticalScrollBarVisibility="Auto" />
+            </Grid>
+          </DockPanel>
+        </Border>
+
+        <!-- ===== 路线管理 ===== -->
+        <Border x:Name="RoutesHost" Background="#F7F7F7" Visibility="Collapsed" Padding="16">
+          <ScrollViewer>
+            <StackPanel>
+              <TextBlock Text="路线管理" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4" />
+              <TextBlock Text="生产路线 = 载入→板材设备→密排→刀路加工档→导出。下列为当前作业进度与机型工序开关。"
+                         TextWrapping="Wrap" Foreground="#666" FontSize="12" Margin="0,0,0,12" />
+              <TextBlock x:Name="RoutesMeta" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" />
+              <TextBlock Text="工序开关（当前机型）" FontWeight="SemiBold" Margin="0,0,0,6" />
+              <CheckBox x:Name="RouteContourChk" Content="轮廓 contour" Margin="0,0,0,4" Click="OnRouteEnableClick" />
+              <CheckBox x:Name="RouteDrillChk" Content="钻孔 drill" Margin="0,0,0,4" Click="OnRouteEnableClick" />
+              <CheckBox x:Name="RouteGrooveChk" Content="开槽 groove" Margin="0,0,0,12" Click="OnRouteEnableClick" />
+              <TextBlock Text="当前作业工序摘要" FontWeight="SemiBold" Margin="0,0,0,6" />
+              <ListBox x:Name="RoutesOpsList" FontSize="12" MinHeight="160" />
+              <Button Content="进入生产加工" Click="OnGotoProductionClick" HorizontalAlignment="Left" Margin="0,12,0,0" />
+            </StackPanel>
+          </ScrollViewer>
+        </Border>
+
+        <!-- ===== 原料管理 ===== -->
+        <Border x:Name="MaterialsHost" Background="#F7F7F7" Visibility="Collapsed" Padding="16">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+              <TextBlock Text="原料管理" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4" />
+              <TextBlock Text="车间材料库 + 当前方案板材。库持久化到 %LocalAppData%/CabinetNC/library.json。"
+                         TextWrapping="Wrap" Foreground="#666" FontSize="12" />
+              <TextBlock x:Name="MaterialsMeta" Margin="0,8,0,0" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+              <TextBlock Text="添加材料" FontWeight="SemiBold" Margin="0,0,0,6" />
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="2*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="MatNameBox" ToolTip="名称" Text="new_mat" />
+                <TextBox Grid.Column="2" x:Name="MatThickBox" ToolTip="厚度" Text="18" />
+                <TextBox Grid.Column="4" x:Name="MatHintBox" ToolTip="类型提示" Text="板式" />
+              </Grid>
+              <WrapPanel Margin="0,8,0,0">
+                <Button Content="添加材料" Click="OnMaterialAddClick" />
+                <Button Content="删除选中库材料" Click="OnMaterialDeleteClick" />
+                <Button Content="从方案同步材料" Click="OnMaterialSyncPackageClick" />
+                <Button Content="保存库" Click="OnLibrarySaveClick" />
+              </WrapPanel>
+            </StackPanel>
+            <ListBox x:Name="MaterialsList" FontSize="12" />
+          </DockPanel>
+        </Border>
+
+        <!-- ===== 工艺模版 ===== -->
+        <Border x:Name="ProcessHost" Background="#F7F7F7" Visibility="Collapsed" Padding="16">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+              <TextBlock Text="工艺模版" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4" />
+              <TextBlock Text="刀具库与进给模板。可按机型生成默认刀，并查看当前作业工序。"
+                         TextWrapping="Wrap" Foreground="#666" FontSize="12" />
+              <TextBlock x:Name="ProcessMeta" Margin="0,8,0,0" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+              <TextBlock Text="添加 / 更新刀具" FontWeight="SemiBold" Margin="0,0,0,6" />
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="2*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" /><ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="ToolNameBox" ToolTip="名称" Text="router" />
+                <TextBox Grid.Column="2" x:Name="ToolDiaBox" ToolTip="直径" Text="6" />
+                <TextBox Grid.Column="4" x:Name="ToolFeedXyBox" ToolTip="进给 XY" Text="4000" />
+                <TextBox Grid.Column="6" x:Name="ToolRpmBox" ToolTip="转速" Text="18000" />
+              </Grid>
+              <WrapPanel Margin="0,8,0,0">
+                <Button Content="添加刀具" Click="OnToolAddClick" />
+                <Button x:Name="ToolApplyBtn" Content="应用选中到当前加工" Click="OnToolApplyClick" />
+                <Button Content="删除选中" Click="OnToolDeleteClick" />
+                <Button Content="从机型重置刀具" Click="OnToolResetFromMachinesClick" />
+                <Button Content="保存库" Click="OnLibrarySaveClick" />
+              </WrapPanel>
+            </StackPanel>
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <DockPanel Margin="0,0,8,0">
+                <TextBlock DockPanel.Dock="Top" Text="刀具库" FontWeight="SemiBold" Margin="0,0,0,4" />
+                <ListBox x:Name="ProcessToolsList" FontSize="12" SelectionChanged="OnProcessToolSelected" />
+              </DockPanel>
+              <DockPanel Grid.Column="1">
+                <TextBlock DockPanel.Dock="Top" Text="当前作业工序" FontWeight="SemiBold" Margin="0,0,0,4" />
+                <ListBox x:Name="ProcessOpsList" FontSize="12" />
+              </DockPanel>
+            </Grid>
+          </DockPanel>
+        </Border>
+
+        <!-- ===== 参数设置 ===== -->
+        <Border x:Name="SettingsHost" Background="#F7F7F7" Visibility="Collapsed" Padding="16">
+          <ScrollViewer>
+            <StackPanel MaxWidth="520" HorizontalAlignment="Left">
+              <TextBlock Text="参数设置" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4" />
+              <TextBlock Text="排版默认值与车间偏好。保存后写入 library.json；可一键应用到当前生产加工。"
+                         TextWrapping="Wrap" Foreground="#666" FontSize="12" Margin="0,0,0,12" />
+              <TextBlock Text="默认板宽 mm" FontSize="11" Foreground="#555" />
+              <TextBox x:Name="SetSheetWBox" Margin="0,0,0,8" />
+              <TextBlock Text="默认板长 mm" FontSize="11" Foreground="#555" />
+              <TextBox x:Name="SetSheetLBox" Margin="0,0,0,8" />
+              <TextBlock Text="默认间距 mm" FontSize="11" Foreground="#555" />
+              <TextBox x:Name="SetSpacingBox" Margin="0,0,0,8" />
+              <TextBlock Text="默认边距 mm" FontSize="11" Foreground="#555" />
+              <TextBox x:Name="SetBorderBox" Margin="0,0,0,8" />
+              <CheckBox x:Name="SetAllowRotChk" Content="默认允许旋转排版" Margin="0,0,0,12" />
+              <TextBlock x:Name="SettingsMeta" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" />
+              <WrapPanel>
+                <Button Content="保存参数" Click="OnSettingsSaveClick" />
+                <Button Content="应用到生产加工" Click="OnSettingsApplyClick" />
+                <Button Content="恢复默认" Click="OnSettingsResetClick" />
+              </WrapPanel>
+            </StackPanel>
+          </ScrollViewer>
+        </Border>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

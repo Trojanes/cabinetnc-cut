@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+option csharp_namespace = "CabinetNC.Compute.Contracts";
+
+package cabinetnc.worker;
+
+service WorkerHealth {
+  rpc Ping (PingRequest) returns (PingReply);
+  rpc GetWorkerVersion (VersionRequest) returns (VersionReply);
+}
+
+service Nesting {
+  rpc StartNesting (StartNestingRequest) returns (StartNestingReply);
+}
+
+service Operations {
+  rpc GenerateOperations (GenerateOperationsRequest) returns (GenerateOperationsReply);
+}
+
+message PingRequest {
+  string token = 1;
+}
+
+message PingReply {
+  bool ok = 1;
+  string message = 2;
+  int64 unix_ms = 3;
+}
+
+message VersionRequest {}
+
+message VersionReply {
+  string worker_version = 1;
+  string contract_version = 2;
+}
+
+message NestPartMsg {
+  string panel_id = 1;
+  double width_mm = 2;
+  double height_mm = 3;
+  bool may_rotate = 4;
+}
+
+message StartNestingRequest {
+  repeated NestPartMsg parts = 1;
+  double sheet_width_mm = 2;
+  double sheet_length_mm = 3;
+  double spacing_mm = 4;
+  double border_mm = 5;
+  bool allow_rotation = 6;
+}
+
+message NestPlacementMsg {
+  string panel_id = 1;
+  int32 sheet_index = 2;
+  double offset_x = 3;
+  double offset_y = 4;
+  double rotation_deg = 5;
+}
+
+message NestWarningMsg {
+  string code = 1;
+  string message = 2;
+  string panel_id_a = 3;
+  string panel_id_b = 4;
+  int32 sheet_index = 5;
+}
+
+message StartNestingReply {
+  bool ok = 1;
+  string engine = 2;
+  repeated NestPlacementMsg placements = 3;
+  int32 sheet_count = 4;
+  repeated string unplaced = 5;
+  string error = 6;
+  repeated NestWarningMsg warnings = 7;
+}
+
+message Point2Msg {
+  double x = 1;
+  double y = 2;
+}
+
+message PanelFeatureMsg {
+  string feature_id = 1;
+  string kind = 2;
+  double x = 3;
+  double y = 4;
+  double diameter_mm = 5;
+  double depth_mm = 6;
+}
+
+message PanelGeomMsg {
+  string panel_id = 1;
+  repeated Point2Msg outline = 2;
+  repeated PanelFeatureMsg features = 3;
+}
+
+message GenerateOperationsRequest {
+  repeated PanelGeomMsg panels = 1;
+  repeated NestPlacementMsg placements = 2;
+}
+
+message CutOpMsg {
+  string op = 1;
+  string panel_id = 2;
+  string feature_id = 3;
+  bool placed = 4;
+  int32 sheet_index = 5;
+  double sheet_x = 6;
+  double sheet_y = 7;
+  double diameter_mm = 8;
+  double depth_mm = 9;
+  int32 path_point_count = 10;
+}
+
+message GenerateOperationsReply {
+  bool ok = 1;
+  repeated CutOpMsg ops = 2;
+  string error = 3;
+  int32 contour_count = 4;
+  int32 drill_count = 5;
+}
+
+service PostProcessor {
+  rpc GenerateNc (GenerateNcRequest) returns (GenerateNcReply);
+}
+
+message GenerateNcRequest {
+  repeated PanelGeomMsg panels = 1;
+  repeated NestPlacementMsg placements = 2;
+  string machine_id = 3;
+}
+
+message GenerateNcReply {
+  bool ok = 1;
+  string nc_text = 2;
+  string machine_id = 3;
+  string machine_name = 4;
+  int32 line_count = 5;
+  string error = 6;
+}

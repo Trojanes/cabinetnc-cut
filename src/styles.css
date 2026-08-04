@@ -1,0 +1,242 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; font: 13px/1.4 "Segoe UI", "PingFang SC", sans-serif; color: #1a1a1a; background: #e8e8e8; }
+
+body.drag-import::after {
+  content: "松开以导入 JSON / DXF";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 40, 80, 0.55);
+  color: #fff;
+  font: 600 18px/1.4 system-ui, sans-serif;
+  pointer-events: none;
+}
+
+/* MakerHub-like: top · workflow · left tree · canvas · right inspector */
+.app {
+  display: grid;
+  grid-template-columns: 220px 1fr 280px;
+  grid-template-rows: auto auto 1fr auto;
+  height: 100%;
+  background: #f0f0f0;
+}
+
+.top {
+  grid-column: 1 / -1;
+  padding: 6px 12px;
+  border-bottom: 1px solid #b8b8b8;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  background: linear-gradient(#fafafa, #ececec);
+}
+.brand-block { min-width: 140px; }
+.brand { font-weight: 700; font-size: 15px; letter-spacing: 0.02em; }
+.tagline { margin: 0; color: #666; font-size: 11px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+button, .file-btn {
+  font: inherit;
+  padding: 4px 10px;
+  cursor: pointer;
+  border: 1px solid #aaa;
+  background: #fff;
+  border-radius: 2px;
+}
+button:hover:not(:disabled), .file-btn:hover { background: #f5f5f5; }
+button:disabled { opacity: 0.45; cursor: default; }
+.file-btn { display: inline-flex; align-items: center; }
+
+.workflow {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-bottom: 1px solid #b8b8b8;
+  background: #ddd;
+}
+.stage-tab {
+  border: 0;
+  border-right: 1px solid #bbb;
+  border-radius: 0;
+  background: transparent;
+  padding: 8px 18px;
+  font-weight: 600;
+  color: #444;
+}
+.stage-tab .n {
+  display: inline-block;
+  width: 1.2em;
+  height: 1.2em;
+  line-height: 1.2em;
+  text-align: center;
+  border-radius: 50%;
+  background: #ccc;
+  font-size: 11px;
+  margin-right: 4px;
+}
+.stage-tab.active {
+  background: #fff;
+  color: #111;
+  box-shadow: inset 0 -2px 0 #2a6;
+}
+.stage-tab.active .n { background: #2a6; color: #fff; }
+.workflow-meta {
+  margin-left: auto;
+  padding: 6px 14px;
+  font-size: 11px;
+  color: #666;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.wf-progress { display: flex; gap: 4px; }
+.wf-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #bbb;
+  border: 1px solid #999;
+}
+.wf-dot.done { background: #2a6; border-color: #185; }
+.wf-dot.current { box-shadow: 0 0 0 2px #fff, 0 0 0 3px #2a6; }
+
+.prop-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.prop-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: #555;
+}
+.prop-grid input {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid #aaa;
+  border-radius: 2px;
+  width: 100%;
+}
+
+.rail-left, .rail-right {
+  padding: 8px;
+  overflow: auto;
+  background: #f7f7f7;
+  border-color: #c8c8c8;
+}
+.rail-left { border-right: 1px solid #c8c8c8; }
+.rail-right { border-left: 1px solid #c8c8c8; }
+.rail-left h2, .rail-right h2 {
+  margin: 12px 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #666;
+}
+.rail-left section:first-child h2,
+.rail-right section:first-child h2 { margin-top: 0; }
+
+.meta { white-space: pre-wrap; font-size: 12px; }
+.meta.empty { color: #999; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li {
+  padding: 4px 6px;
+  border: 1px solid #ddd;
+  margin-bottom: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  background: #fff;
+}
+.list li.active { outline: 2px solid #2a6; border-color: #2a6; }
+.list.warn li { color: #864; }
+
+.tree { font-size: 12px; }
+.tree.empty { color: #999; }
+.tree-node { margin: 0 0 2px; }
+.tree-node button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 3px 4px;
+  font: inherit;
+}
+.tree-node button:hover { background: #e8e8e8; }
+.tree-node button.active { background: #d4ecd4; font-weight: 600; }
+.tree-children { margin-left: 12px; border-left: 1px solid #ccc; padding-left: 6px; }
+.tree-label { color: #888; font-size: 11px; margin: 6px 0 2px; }
+
+.geom-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.geom-actions button { font-size: 12px; padding: 3px 6px; }
+
+.stage { display: flex; flex-direction: column; min-width: 0; background: #fff; }
+.stage-bar {
+  padding: 6px 10px;
+  border-bottom: 1px solid #ccc;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: #fafafa;
+}
+.hint { color: #666; font-size: 12px; }
+.nest-opt { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #444; user-select: none; }
+.nest-opt input { margin: 0; }
+
+#nestCanvas { flex: 1; width: 100%; background: #f4f4f4; display: block; min-height: 0; }
+.out-preview {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font: 12px/1.45 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+.status-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+  border-top: 1px solid #b8b8b8;
+  background: #e4e4e4;
+  font-size: 11px;
+  color: #333;
+}
+.status-bar .muted { color: #777; }
+
+.library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 120px;
+  overflow: auto;
+}
+.library-list li {
+  padding: 2px 4px;
+  font-size: 11px;
+  border-bottom: 1px solid #e0e0e0;
+  cursor: pointer;
+}
+.library-list li:hover { background: #e8f0e8; }
+.library-list li.active { background: #d4ecd4; }
+
+@media (max-width: 960px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto 1fr auto auto;
+  }
+  .rail-left { border-right: 0; border-bottom: 1px solid #ccc; max-height: 180px; }
+  .rail-right { border-left: 0; border-top: 1px solid #ccc; max-height: 220px; }
+  #nestCanvas { min-height: 320px; }
+}

@@ -1,0 +1,209 @@
+﻿{
+    "schema":  "cabinetnc.product-evaluation",
+    "schemaVersion":  1,
+    "evaluatedAt":  "2026-07-22T13:04:19.9605470+10:00",
+    "targetScore":  85,
+    "score":  99,
+    "maxScore":  100,
+    "hardGateOk":  true,
+    "ready":  true,
+    "hardGates":  {
+                      "desktopBuild":  true,
+                      "fullTests":  true,
+                      "uiSmoke":  true,
+                      "import120":  true,
+                      "rotationCoordinateSafety":  true,
+                      "preflight":  true,
+                      "noHighSeverityNuget":  true
+                  },
+    "criteria":  [
+                     {
+                         "id":  "A1-import",
+                         "earned":  6,
+                         "max":  6,
+                         "pass":  true,
+                         "evidence":  "tests + SMK-010"
+                     },
+                     {
+                         "id":  "A2-nest",
+                         "earned":  8,
+                         "max":  8,
+                         "pass":  true,
+                         "evidence":  "tests + SMK-031 + SMK-036"
+                     },
+                     {
+                         "id":  "A3-cam-nc",
+                         "earned":  8,
+                         "max":  8,
+                         "pass":  true,
+                         "evidence":  "tests + SMK-042/043/044"
+                     },
+                     {
+                         "id":  "A4-export",
+                         "earned":  6,
+                         "max":  6,
+                         "pass":  true,
+                         "evidence":  "export sources + tests + SMK-046/050-053"
+                     },
+                     {
+                         "id":  "A5-persistence",
+                         "earned":  4,
+                         "max":  4,
+                         "pass":  true,
+                         "evidence":  "SQLite/library sources + tests"
+                     },
+                     {
+                         "id":  "A6-modules",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "SMK-002"
+                     },
+                     {
+                         "id":  "B1-full-tests",
+                         "earned":  6,
+                         "max":  6,
+                         "pass":  true,
+                         "evidence":  "D:\\project\\cabinetnc-cut\\dotnet\\artifacts\\evaluation-tests.log"
+                     },
+                     {
+                         "id":  "B2-rotation-xy",
+                         "earned":  5,
+                         "max":  5,
+                         "pass":  true,
+                         "evidence":  "rotation unit test + UI NC negative-XY assertion"
+                     },
+                     {
+                         "id":  "B3-invalid-input",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "CutPackageImporter rejection tests"
+                     },
+                     {
+                         "id":  "B4-poly-gap",
+                         "earned":  4,
+                         "max":  4,
+                         "pass":  true,
+                         "evidence":  "Clipper tests + SMK-036"
+                     },
+                     {
+                         "id":  "B5-preflight",
+                         "earned":  4,
+                         "max":  4,
+                         "pass":  true,
+                         "evidence":  "NcPreflight tests + SMK-046"
+                     },
+                     {
+                         "id":  "B6-review-lint",
+                         "earned":  2,
+                         "max":  3,
+                         "pass":  false,
+                         "evidence":  "0 CS/high-NuGet/compatibility warnings"
+                     },
+                     {
+                         "id":  "C1-startup-worker",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "SMK-001"
+                     },
+                     {
+                         "id":  "C2-stage-gates",
+                         "earned":  2,
+                         "max":  2,
+                         "pass":  true,
+                         "evidence":  "SMK-003"
+                     },
+                     {
+                         "id":  "C3-module-navigation",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "SMK-002"
+                     },
+                     {
+                         "id":  "C4-feedback-dialog",
+                         "earned":  2,
+                         "max":  2,
+                         "pass":  true,
+                         "evidence":  "SMK-010 import result dialog"
+                     },
+                     {
+                         "id":  "C5-manual-library",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "SMOKE_CASE_LIBRARY.md"
+                     },
+                     {
+                         "id":  "C6-status-preflight",
+                         "earned":  2,
+                         "max":  2,
+                         "pass":  true,
+                         "evidence":  "SMK-046"
+                     },
+                     {
+                         "id":  "D1-domain-tests",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "Domain/Package/Infrastructure suites"
+                     },
+                     {
+                         "id":  "D2-repeatable-uia",
+                         "earned":  2,
+                         "max":  2,
+                         "pass":  true,
+                         "evidence":  "smoke JSON + exit code"
+                     },
+                     {
+                         "id":  "D3-open-dependencies",
+                         "earned":  2,
+                         "max":  2,
+                         "pass":  true,
+                         "evidence":  "Clipper2 package; no MakerHub binaries"
+                     },
+                     {
+                         "id":  "D4-doc-consistency",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "rubric + manual library"
+                     },
+                     {
+                         "id":  "E1-desktop-build",
+                         "earned":  5,
+                         "max":  5,
+                         "pass":  true,
+                         "evidence":  "D:\\project\\cabinetnc-cut\\dotnet\\artifacts\\evaluation-build.log"
+                     },
+                     {
+                         "id":  "E2-pack-script",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "scripts/pack.ps1"
+                     },
+                     {
+                         "id":  "E3-automated-smoke",
+                         "earned":  4,
+                         "max":  4,
+                         "pass":  true,
+                         "evidence":  "D:\\project\\cabinetnc-cut\\dotnet\\artifacts\\smoke-latest.json"
+                     },
+                     {
+                         "id":  "E4-manual-runbook",
+                         "earned":  3,
+                         "max":  3,
+                         "pass":  true,
+                         "evidence":  "manual cases with steps/expected/risk"
+                     }
+                 ],
+    "residualRisk":  [
+                         "True NFP/DXOPT-grade placement is not implemented",
+                         "CAM simulation is point-playhead, not material removal",
+                         "SkiaSharp/OpenTK emits NU1701 target-framework compatibility warnings",
+                         "Signed MSI and real-machine validation remain"
+                     ]
+}

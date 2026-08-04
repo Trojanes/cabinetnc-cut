@@ -1,0 +1,20 @@
+node_modules/
+dist/
+portable/
+*.zip
+.DS_Store
+*.log
+.env
+.env.*
+
+# Native build outputs
+native/cabinetnc_core/build/
+
+# Editor
+.vscode/
+.idea/
+
+# .NET
+dotnet/**/bin/
+dotnet/**/obj/
+dotnet/**/*.user

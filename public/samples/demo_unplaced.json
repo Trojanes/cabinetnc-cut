@@ -1,0 +1,62 @@
+{
+  "schema": "cabinetnc.cut-package",
+  "schemaVersion": 1,
+  "exportedAt": "2026-07-18T00:00:00Z",
+  "source": {
+    "app": "CabinetNC",
+    "designName": "Unplaced Demo",
+    "exportId": "demo-unplaced"
+  },
+  "units": "mm",
+  "sheets": [
+    {
+      "sheetId": "S1",
+      "material": "oak",
+      "colorTag": "oak",
+      "thicknessMm": 18,
+      "widthMm": 1220,
+      "lengthMm": 2440,
+      "trim": { "left": 15, "right": 15, "front": 15, "back": 15 }
+    }
+  ],
+  "panels": [
+    {
+      "panelId": "OK1",
+      "name": "OK1",
+      "boardType": "carcass",
+      "material": "oak",
+      "colorTag": "oak",
+      "thicknessMm": 18,
+      "bbox": { "widthMm": 400, "heightMm": 300 },
+      "rotatable": true,
+      "grainLocked": false,
+      "faceUp": "A",
+      "outline": {
+        "points": [[0, 0], [400, 0], [400, 300], [0, 300]]
+      },
+      "features": []
+    },
+    {
+      "panelId": "HUGE1",
+      "name": "HUGE1",
+      "boardType": "carcass",
+      "material": "oak",
+      "colorTag": "oak",
+      "thicknessMm": 18,
+      "bbox": { "widthMm": 2000, "heightMm": 2000 },
+      "rotatable": true,
+      "grainLocked": false,
+      "faceUp": "A",
+      "outline": {
+        "points": [[0, 0], [2000, 0], [2000, 2000], [0, 2000]]
+      },
+      "features": []
+    }
+  ],
+  "nestSettings": {
+    "spacingMm": 12,
+    "borderMm": 15,
+    "allowRotation": true,
+    "allowPartsInPart": false
+  }
+}

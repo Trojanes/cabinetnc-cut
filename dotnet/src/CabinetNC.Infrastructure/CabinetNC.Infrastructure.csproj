@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\CabinetNC.Application\CabinetNC.Application.csproj" />
+    <ProjectReference Include="..\CabinetNC.Domain\CabinetNC.Domain.csproj" />
+    <ProjectReference Include="..\CabinetNC.FusionPackage\CabinetNC.FusionPackage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

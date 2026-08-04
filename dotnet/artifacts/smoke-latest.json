@@ -1,0 +1,59 @@
+{
+  "schema": "cabinetnc.desktop-smoke",
+  "schemaVersion": 1,
+  "runAt": "2026-07-22T13:04:19+1000",
+  "exe": "D:\\project\\cabinetnc-cut\\dotnet\\src\\CabinetNC.Desktop\\bin\\Debug\\net10.0-windows\\CabinetNC.Desktop.exe",
+  "passed": 8,
+  "failed": 0,
+  "ok": true,
+  "cases": [
+    {
+      "id": "SMK-001/003",
+      "name": "startup-and-stage-gates",
+      "status": "PASS",
+      "durationMs": 2659
+    },
+    {
+      "id": "SMK-002",
+      "name": "seven-module-navigation",
+      "status": "PASS",
+      "durationMs": 19632
+    },
+    {
+      "id": "SMK-010",
+      "name": "import-demo-120",
+      "status": "PASS",
+      "durationMs": 6536
+    },
+    {
+      "id": "SMK-031/045",
+      "name": "nest-nc-and-rotation-safety",
+      "status": "PASS",
+      "durationMs": 7990
+    },
+    {
+      "id": "SMK-036",
+      "name": "clipper-poly-verify",
+      "status": "PASS",
+      "durationMs": 10134
+    },
+    {
+      "id": "SMK-043/044",
+      "name": "offset-and-cam-playhead",
+      "status": "PASS",
+      "durationMs": 17234
+    },
+    {
+      "id": "SMK-042",
+      "name": "tool-drives-current-cam",
+      "status": "PASS",
+      "durationMs": 13407
+    },
+    {
+      "id": "SMK-046/050-053",
+      "name": "out-preflight-and-export-controls",
+      "status": "PASS",
+      "durationMs": 30305
+    }
+  ]
+}

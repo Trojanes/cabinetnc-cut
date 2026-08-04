@@ -1,0 +1,19 @@
+{
+  "productName": "CabinetNC Cut",
+  "identifier": "com.cabinetnc.cut",
+  "version": "0.1.0",
+  "status": "spike-not-wired",
+  "ponytail": "Rust/cargo not on PATH on this machine — portable zip + INSTALL.txt is the deliverable. Upgrade: install Rust then cargo tauri init from this intent.",
+  "deliverableNow": "npm run portable → CabinetNC-Cut-v*-portable.zip",
+  "window": {
+    "title": "CabinetNC Cut",
+    "width": 1280,
+    "height": 800,
+    "minWidth": 960,
+    "minHeight": 640
+  },
+  "devUrl": "http://localhost:5177",
+  "frontendDist": "../dist",
+  "nativeCli": "native/cabinetnc_core/build/cabinetnc_offset.exe",
+  "blockedOn": ["Rust toolchain", "tauri-cli", "code-signing for installers"]
+}
