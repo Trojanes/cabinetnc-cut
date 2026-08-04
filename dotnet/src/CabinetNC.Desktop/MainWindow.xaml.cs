@@ -955,12 +955,12 @@ public partial class MainWindow : Window
         }
     }
 
-        void RefreshNestReport()
+    void RefreshNestReport()
     {
         NestUnplacedList.Items.Clear();
         if (_nest is not { Ok: true })
         {
-            NestReportMeta.Text = "No nest yet — enter Nest stage or Repack";
+            NestReportMeta.Text = "尚未排版 — 进入密排或点应用并重排";
             return;
         }
 
@@ -979,20 +979,30 @@ public partial class MainWindow : Window
         var sheets = Math.Max(1, _nest.SheetCount);
         var sheetArea = sw * sh * sheets;
         var util = sheetArea > 0 ? used / sheetArea * 100 : 0;
+        var gateNote = "";
+        if (_session.Package is not null)
+        {
+            var gate = NestExportGate.Check(
+                _session.Package.Panels,
+                CurrentNestPlacements(),
+                ParseMm(NestSpacingBox.Text, 12));
+            gateNote = gate.Ok ? "export_gate: OK" : $"export_gate: FAIL ({gate.Errors.Count})";
+        }
         NestReportMeta.Text =
             $"engine: {_nest.Engine}\n" +
             $"util: {util:0.0}%\n" +
             $"area: {used / 1e6:0.000} m2 / sheet {sheetArea / 1e6:0.000} m2 x{sheets}\n" +
             $"placed: {_nest.Placements.Count} · unplaced: {_nest.Unplaced.Count}\n" +
-            $"warnings: {_nest.Warnings.Count}";
+            $"warnings: {_nest.Warnings.Count}\n" +
+            gateNote;
 
         if (_nest.Unplaced.Count == 0 && _nest.Warnings.Count == 0)
-            NestUnplacedList.Items.Add("none unplaced · no warnings");
+            NestUnplacedList.Items.Add("无未排件 · 无警告");
         else
         {
             foreach (var id in _nest.Unplaced)
-                NestUnplacedList.Items.Add($"unplaced {id}");
-            foreach (var w in _nest.Warnings.Take(12))
+                NestUnplacedList.Items.Add($"未排 {id}");
+            foreach (var w in _nest.Warnings.Take(20))
                 NestUnplacedList.Items.Add($"{w.Code}: {w.Message}");
         }
     }
@@ -1423,31 +1433,26 @@ public partial class MainWindow : Window
             var allowRot = NestAllowRotChk.IsChecked == true;
             var border = ParseMm(NestBorderBox.Text, 15);
             var spacing = ParseMm(NestSpacingBox.Text, 12);
-            var parts = _session.Package.Panels.Select(p =>
+            var settings = new NestSettings
             {
-                var (w, h) = SizeOf(p);
-                return new NestPart
-                {
-                    PanelId = p.PanelId,
-                    WidthMm = w,
-                    HeightMm = h,
-                    MayRotate = allowRot && p.MayRotate90,
-                };
-            }).ToList();
+                MarginMm = border,
+                ClearanceMm = spacing,
+                AllowRotation = allowRot,
+                GrainLock = true,
+                PreferLockedPlacements = true,
+            };
+            var consistency = settings.ValidateConsistency();
+            if (consistency.Count > 0)
+                SetStatus("Nest settings warn: " + string.Join(", ", consistency));
 
             var sheets = BuildNestSheetQueue(border);
             var prevPlaces = _nest?.Placements.ToDictionary(p => p.PanelId, p => p);
 
-            var packed = BlfNester.Pack(new NestRequest
-            {
-                Parts = parts,
-                SheetWidthMm = ParseMm(StockWidthBox.Text, 1220),
-                SheetLengthMm = ParseMm(StockLengthBox.Text, 2440),
-                SpacingMm = spacing,
-                BorderMm = border,
-                AllowRotation = allowRot,
-                Sheets = sheets,
-            });
+            var packed = GroupedBlfNester.Pack(
+                _session.Package.Panels,
+                settings,
+                sheets,
+                SizeOf);
 
             _nest = new StartNestingReply
             {
@@ -1465,6 +1470,24 @@ public partial class MainWindow : Window
                     OffsetX = p.OffsetX,
                     OffsetY = p.OffsetY,
                     RotationDeg = p.RotationDeg,
+                });
+            }
+            foreach (var r in packed.UnplacedReasons)
+            {
+                _nest.Warnings.Add(new NestWarningMsg
+                {
+                    Code = r.Code,
+                    Message = $"{r.PanelId}: {r.Message}",
+                    PanelIdA = r.PanelId,
+                });
+            }
+            foreach (var g in packed.GroupReports)
+            {
+                _nest.Warnings.Add(new NestWarningMsg
+                {
+                    Code = "group_report",
+                    Message =
+                        $"{g.Key}: placed {g.PlacedCount}/{g.PartCount} · sheets {g.SheetCount} · util {g.UtilizationPct:0.0}%",
                 });
             }
             if (prevPlaces is not null && _locked.Count > 0)
@@ -1494,6 +1517,22 @@ public partial class MainWindow : Window
                     PanelIdB = c.PanelIdB,
                     SheetIndex = c.SheetIndex,
                 });
+            }
+
+            var gate = NestExportGate.Check(
+                _session.Package.Panels,
+                CurrentNestPlacements(),
+                spacing);
+            if (!gate.Ok)
+            {
+                foreach (var err in gate.Errors.Take(12))
+                {
+                    _nest.Warnings.Add(new NestWarningMsg
+                    {
+                        Code = "export_gate",
+                        Message = err,
+                    });
+                }
             }
 
             _showNest = true;
@@ -1566,6 +1605,8 @@ public partial class MainWindow : Window
                     LengthMm = s.LengthMm > 0 ? s.LengthMm : ParseMm(StockLengthBox.Text, 2440),
                     BorderMm = s.MarginMm > 0 ? s.MarginMm : border,
                     Label = s.SheetId,
+                    Material = s.Material,
+                    ThicknessMm = s.ThicknessMm,
                     Blocked = s.DefectRegions.Select(d => new NestBlockedRect
                     {
                         MinX = d.MinX, MinY = d.MinY, MaxX = d.MaxX, MaxY = d.MaxY,
@@ -1575,12 +1616,15 @@ public partial class MainWindow : Window
         }
         else
         {
+            // Blank template (ThicknessMm=0): GroupedBlfNester clones per material/thickness group.
             queue.Add(new NestSheetSpec
             {
                 WidthMm = ParseMm(StockWidthBox.Text, 1220),
                 LengthMm = ParseMm(StockLengthBox.Text, 2440),
                 BorderMm = border,
                 Label = "STOCK",
+                Material = null,
+                ThicknessMm = 0,
             });
         }
 
@@ -1592,6 +1636,8 @@ public partial class MainWindow : Window
                 LengthMm = r.LengthMm,
                 BorderMm = Math.Min(border, 8),
                 Label = r.Id,
+                Material = r.Material,
+                ThicknessMm = r.ThicknessMm,
             });
         }
         return queue;
@@ -1878,6 +1924,26 @@ public partial class MainWindow : Window
                 MessageBoxImage.Warning);
             return false;
         }
+
+        if (_session.Package is not null)
+        {
+            var clearance = ParseMm(NestSpacingBox.Text, 12);
+            var nestGate = NestExportGate.Check(
+                _session.Package.Panels,
+                CurrentNestPlacements(),
+                clearance);
+            if (!nestGate.Ok)
+            {
+                MessageBox.Show(this,
+                    "密排间距/碰撞/混组硬门未通过，禁止导出：\n\n" +
+                    string.Join("\n", nestGate.Errors.Take(20)),
+                    "Nest 导出硬门",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return false;
+            }
+        }
+
         RebuildOpsOverlay();
         var report = RunPreflight();
         RefreshPreflightMeta();

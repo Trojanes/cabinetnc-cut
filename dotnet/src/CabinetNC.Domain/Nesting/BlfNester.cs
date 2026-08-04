@@ -8,6 +8,8 @@ public sealed class NestSheetSpec
     /// <summary>Keep-out AABBs in sheet space.</summary>
     public IReadOnlyList<NestBlockedRect> Blocked { get; init; } = [];
     public string? Label { get; init; }
+    public string? Material { get; init; }
+    public double ThicknessMm { get; init; }
 }
 
 public sealed class NestBlockedRect
@@ -36,6 +38,8 @@ public sealed class NestPart
     public double WidthMm { get; init; }
     public double HeightMm { get; init; }
     public bool MayRotate { get; init; } = true;
+    public string? Material { get; init; }
+    public double ThicknessMm { get; init; }
 }
 
 public sealed class NestPlacement
@@ -53,6 +57,9 @@ public sealed class NestResult
     public required IReadOnlyList<NestPlacement> Placements { get; init; }
     public int SheetCount { get; init; }
     public IReadOnlyList<string> Unplaced { get; init; } = [];
+    public IReadOnlyList<NestUnplacedReason> UnplacedReasons { get; init; } = [];
+    public IReadOnlyList<NestGroupReport> GroupReports { get; init; } = [];
+    public IReadOnlyList<NestSheetSpec> SheetsUsed { get; init; } = [];
 }
 
 /// <summary>

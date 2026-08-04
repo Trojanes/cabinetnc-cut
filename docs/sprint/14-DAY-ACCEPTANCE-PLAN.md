@@ -240,9 +240,9 @@ docs/sprint/day-NN-report.md
 
 **自动 Gate：**
 
-- [ ] 两材料或两厚度样本不会排进同一 sheet
-- [ ] 碰撞/间距失败 → 导出被拦
-- [ ] Nest 相关单测扩展且全绿
+- [x] 两材料或两厚度样本不会排进同一 sheet
+- [x] 碰撞/间距失败 → 导出被拦
+- [x] Nest 相关单测扩展且全绿
 
 **监督 Gate：**
 
@@ -251,8 +251,8 @@ docs/sprint/day-NN-report.md
 
 **待拍板：**
 
-- 默认边距/间距数值
-- 有木纹默认是否锁 0/180
+- 默认边距/间距数值 — ASSUMED 15 / 12（见 day-05-report）
+- 有木纹默认是否锁 0/180 — ASSUMED GrainLock=true
 
 ---
 
