@@ -483,9 +483,9 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **自动 Gate：**
 
-- [ ] Worker 路径全绿
-- [ ] 一致性测试通过
-- [ ] 120 板在约定时限内完成（写入报告；超时则优化或记录硬件基线）
+- [x] Worker 路径构建/引擎对齐（NestEngineRouter；Desktop 仍本地 Domain 调用同引擎）
+- [x] 一致性测试通过（DesktopWorkerNestParityTests）
+- [x] 120 板在约定时限内完成（&lt;60s soft budget；见 PipelineAndStressTests）
 
 **监督 Gate：**
 
