@@ -81,6 +81,9 @@ public sealed class ExportBundle
     public required IReadOnlyList<SheetArtifact> Sheets { get; init; }
     public required string RootManifestJson { get; init; }
     public string? JobSheetHtml { get; init; }
+    public string? BomCsv { get; init; }
+    public string? LabelsHtml { get; init; }
+    public IReadOnlyList<WorkpieceLabel> Labels { get; init; } = [];
 }
 
 /// <summary>Per-sheet NC/DXF/manifest bundle (Day 10).</summary>
@@ -163,6 +166,10 @@ public static class SheetBundleBuilder
             }),
         };
 
+        var labels = LabelBomBuilder.BuildLabels(package, placements);
+        var bom = LabelBomBuilder.ToCsv(labels, ops);
+        var labelsHtml = LabelBomBuilder.ToLabelsHtml(labels);
+
         return new ExportBundle
         {
             JobId = jobId,
@@ -170,6 +177,9 @@ public static class SheetBundleBuilder
             Sheets = sheets,
             RootManifestJson = JsonSerializer.Serialize(root, JsonOpts),
             JobSheetHtml = jobSheetHtml,
+            BomCsv = bom,
+            LabelsHtml = labelsHtml,
+            Labels = labels,
         };
     }
 
@@ -197,6 +207,18 @@ public static class SheetBundleBuilder
             var htmlPath = Path.Combine(directory, $"{bundle.JobId}_sheet.html");
             File.WriteAllText(htmlPath, bundle.JobSheetHtml);
             written.Add(htmlPath);
+        }
+        if (!string.IsNullOrWhiteSpace(bundle.BomCsv))
+        {
+            var bomPath = Path.Combine(directory, $"{bundle.JobId}_bom.csv");
+            File.WriteAllText(bomPath, bundle.BomCsv);
+            written.Add(bomPath);
+        }
+        if (!string.IsNullOrWhiteSpace(bundle.LabelsHtml))
+        {
+            var labPath = Path.Combine(directory, $"{bundle.JobId}_labels.html");
+            File.WriteAllText(labPath, bundle.LabelsHtml);
+            written.Add(labPath);
         }
         return written;
     }

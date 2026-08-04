@@ -453,9 +453,9 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **自动 Gate：**
 
-- [ ] 导出包含 labels + bom.csv
-- [ ] 标签 ID ⊆ manifest WorkpieceId
-- [ ] 基础 DXF 外轮廓导入测试（至少矩形）
+- [x] 导出包含 labels + bom.csv
+- [x] 标签 ID ⊆ manifest WorkpieceId
+- [x] 基础 DXF 外轮廓导入测试（至少矩形）
 
 **监督 Gate：**
 
@@ -464,7 +464,7 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **待拍板：**
 
-- 标签尺寸/打印机（无设备则验收“预览 HTML/PDF”）
+- 标签尺寸/打印机（无设备则验收“预览 HTML/PDF”）— ASSUMED HTML preview
 - 是否要条码（默认否）
 
 ---
