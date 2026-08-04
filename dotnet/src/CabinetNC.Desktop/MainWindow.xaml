@@ -198,14 +198,41 @@
                 <StackPanel>
                   <TextBlock Text="检视 / 编辑" Style="{StaticResource RailH2}" Margin="0" />
                   <TextBlock x:Name="GeomMeta" Text="选板后可编辑" TextWrapping="Wrap" FontSize="12" Foreground="#555" Margin="0,0,0,8" />
+                  <TextBlock x:Name="DirtyBanner" Text="" TextWrapping="Wrap" FontSize="11" Foreground="#B45309" Margin="0,0,0,8" Visibility="Collapsed" />
                   <WrapPanel Margin="0,0,0,8">
                     <Button Content="特征→10" Click="OnGeomMoveClick" Padding="8,4" Margin="0,0,4,4" />
                     <Button Content="旋转90°" Click="OnGeomRotClick" Padding="8,4" Margin="0,0,4,4" />
                     <Button Content="+孔⌀8" Click="OnGeomHoleClick" Padding="8,4" Margin="0,0,4,4" />
                     <Button Content="+槽" Click="OnGeomGrooveClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="撤销" Click="OnUndoClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="重做" Click="OnRedoClick" Padding="8,4" Margin="0,0,4,4" />
                   </WrapPanel>
                   <TextBlock Text="特征" Style="{StaticResource RailH2}" />
-                  <ListBox x:Name="FeatList" BorderThickness="0" Background="Transparent" FontSize="12" MinHeight="60" />
+                  <ListBox x:Name="FeatList" BorderThickness="0" Background="Transparent" FontSize="12" MinHeight="60"
+                           SelectionChanged="OnFeatListChanged" />
+                  <Border Background="#EEE" Padding="8" Margin="0,8,0,0" CornerRadius="4">
+                    <StackPanel>
+                      <TextBlock Text="特征 Inspector" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6" />
+                      <TextBlock x:Name="InspKind" Text="未选特征" FontSize="11" Foreground="#555" Margin="0,0,0,6" />
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" /><ColumnDefinition Width="6" /><ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                          <TextBlock Text="X / 直径 mm" FontSize="10" Foreground="#666" />
+                          <TextBox x:Name="InspXBox" Margin="0,0,0,4" />
+                          <TextBox x:Name="InspDiaBox" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                          <TextBlock Text="Y / 深度·宽度 mm" FontSize="10" Foreground="#666" />
+                          <TextBox x:Name="InspYBox" Margin="0,0,0,4" />
+                          <TextBox x:Name="InspDepthBox" Margin="0,0,0,4" />
+                          <TextBox x:Name="InspWidthBox" />
+                        </StackPanel>
+                      </Grid>
+                      <Button Content="应用特征参数" Click="OnInspectApplyClick" Margin="0,8,0,0" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </Border>
                 </StackPanel>
               </ScrollViewer>
             </Border>

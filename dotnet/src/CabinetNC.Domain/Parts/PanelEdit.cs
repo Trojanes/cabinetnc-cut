@@ -183,6 +183,33 @@ public static class PanelEdit
         return ClonePanel(panel, feats);
     }
 
+    public static Panel UpdateFeatureParams(
+        Panel panel,
+        string featureId,
+        double? x = null,
+        double? y = null,
+        double? diameterMm = null,
+        double? depthMm = null,
+        double? widthMm = null)
+    {
+        var feats = panel.Features.Select(f =>
+        {
+            if (f.FeatureId != featureId) return f;
+            return new PanelFeature
+            {
+                FeatureId = f.FeatureId,
+                Kind = f.Kind,
+                X = x ?? f.X,
+                Y = y ?? f.Y,
+                DiameterMm = diameterMm ?? f.DiameterMm,
+                DepthMm = depthMm ?? f.DepthMm,
+                WidthMm = widthMm ?? f.WidthMm,
+                Path = f.Path,
+            };
+        }).ToList();
+        return ClonePanel(panel, feats);
+    }
+
     public static bool IsHole(PanelFeature f) =>
         f.Kind.Contains("hole", StringComparison.OrdinalIgnoreCase);
 
@@ -210,6 +237,11 @@ public static class PanelEdit
             GrainDirection = panel.GrainDirection,
             Outline = outline ?? panel.Outline,
             Features = feats,
+            Identity = panel.Identity,
+            Orientation = panel.Orientation,
+            EdgeBanding = panel.EdgeBanding,
+            Notes = panel.Notes,
+            Side = panel.Side,
         };
 
     static PanelFeature CloneFeature(

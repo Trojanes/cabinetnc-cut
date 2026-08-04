@@ -1,31 +1,45 @@
-# Day 03 report (partial → continuing)
+# Day 03 report
 
 ## Goals
 
-Workpiece editor: Undo/Redo, dirty Nest/CAM invalidation, export block when dirty.
+Workpiece editor: Feature Inspector, Undo/Redo (3 edit classes), dirty Nest/CAM invalidation, export block, garbled-string sweep.
 
-## Done tonight
+## Done
 
-- `EditHistory` + `ProjectSession.ManufacturingDirty`
-- `ReplacePanel` records history + marks dirty + refreshes PackageJson
-- Ctrl+Z / Ctrl+Y restore snapshots
-- Edit clears nest/ops/NC; export blocked until re-nest (`GuardExportPreflight`)
-- Successful nest calls `MarkManufacturingClean`
-- Unit test `ReplacePanel_marks_dirty_and_undo_restores`
+- Feature Inspector UI (`MainWindow.xaml`): X/Y/diameter/depth/width + Apply
+- `PanelEdit.UpdateFeatureParams` + `ClonePanel` preserves Identity/Orientation/EdgeBanding/Notes/Side
+- Undo/Redo unit tests cover **move / param change / add feature**
+- Dirty banner + `GuardExportPreflight` hard-block when manufacturing dirty
+- Nest success → `MarkManufacturingClean`
+- Ctrl+Z/Y + Undo/Redo buttons
+- Garbled-string sweep: no mojibake left under `dotnet/src` (UI already Chinese)
 
-## Not yet (continue next wake)
+## Auto gates
 
-- Feature property Inspector UI (depth/diameter fields)
-- Multi-select
-- Fix remaining garbled UI strings sweep
-- Full Day 3 supervise checklist
+- [x] Undo/Redo covers 3 edit classes (`Undo_covers_move_param_and_add_feature`)
+- [x] Dirty state blocks export path
+- [x] Domain/Package/Infrastructure tests green (11 + 16 + 2)
 
-## Auto gates so far
+## Supervise gates (Troy)
 
-- [x] Undo/Redo unit coverage (move hole)
-- [x] Dirty blocks export path
-- [x] Existing tests green (28 total: 11+15+2)
+- [ ] Change hole depth → Undo restores
+- [ ] After geometry edit, old Nest no longer shown as valid/exportable
+
+## Tests
+
+```text
+dotnet test -c Release
+# Passed: 11 Domain + 16 Package + 2 Infrastructure
+dotnet build src/CabinetNC.Desktop -c Release
+# 0 errors
+```
+
+## Known limits
+
+- Multi-select still not implemented (Day 4+)
+- UIA smoke still hangs in non-interactive agent shell (manual desktop OK)
+- Pocket param fields reuse depth/width; no dedicated pocket inspector layout yet
 
 ## Next
 
-Finish Inspector + then Day 4 clipboard/mirror.
+Day 4: clipboard / mirror / context menu / small-panel warning.

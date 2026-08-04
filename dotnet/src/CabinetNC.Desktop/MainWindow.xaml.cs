@@ -1072,27 +1072,101 @@ public partial class MainWindow : Window
         FeatList.Items.Clear();
         if (_selected is null)
         {
-            GeomMeta.Text = "Select a panel to edit";
+            GeomMeta.Text = "选板后可编辑";
+            InspKind.Text = "未选特征";
+            DirtyBanner.Visibility = Visibility.Collapsed;
             return;
         }
         var box = PanelEdit.BBox(_selected);
+        var orient = _selected.Orientation;
         GeomMeta.Text =
-            $"{_selected.PanelId}\n" +
-            $"{box.W:0.#} x {box.H:0.#} x {_selected.ThicknessMm:0.#} mm\n" +
-            $"features: {_selected.Features.Count} · drag canvas to edit";
+            $"{_selected.PanelId}" +
+            (string.IsNullOrEmpty(_selected.Identity?.ModuleId) ? "" : $" · mod={_selected.Identity!.ModuleId}") + "\n" +
+            $"{box.W:0.#} × {box.H:0.#} × {_selected.ThicknessMm:0.#} mm\n" +
+            $"材料={_selected.Material ?? "—"} · 面={orient?.MillingFace ?? _selected.Side ?? "—"} · 木纹={_selected.GrainDirection ?? "—"}\n" +
+            $"features: {_selected.Features.Count} · 画布拖拽编辑";
+        DirtyBanner.Text = _session.ManufacturingDirty
+            ? "Nest/CAM 已失效 — 请重新密排后再导出"
+            : "";
+        DirtyBanner.Visibility = _session.ManufacturingDirty ? Visibility.Visible : Visibility.Collapsed;
         foreach (var f in _selected.Features)
         {
             if (PanelEdit.IsHole(f))
-                FeatList.Items.Add($"{f.FeatureId} hole D{f.DiameterMm:0.#} @ ({f.X:0.#},{f.Y:0.#})");
+                FeatList.Items.Add($"{f.FeatureId} hole D{f.DiameterMm:0.#} @ ({f.X:0.#},{f.Y:0.#}) d={f.DepthMm:0.#}");
             else if (PanelEdit.IsGroove(f))
-                FeatList.Items.Add($"{f.FeatureId} groove pts={f.Path?.Count ?? 0} w={f.WidthMm:0.#}");
+                FeatList.Items.Add($"{f.FeatureId} groove pts={f.Path?.Count ?? 0} w={f.WidthMm:0.#} d={f.DepthMm:0.#}");
             else
                 FeatList.Items.Add($"{f.FeatureId} {f.Kind}");
         }
         if (FeatList.Items.Count == 0)
-            FeatList.Items.Add("no features (outline only)");
+            FeatList.Items.Add("无特征（仅外轮廓）");
+        if (FeatList.Items.Count > 0 && FeatList.SelectedIndex < 0)
+            FeatList.SelectedIndex = 0;
+        else
+            LoadInspectorFromSelection();
     }
 
+    void OnFeatListChanged(object sender, SelectionChangedEventArgs e) => LoadInspectorFromSelection();
+
+    PanelFeature? SelectedFeature()
+    {
+        if (_selected is null || FeatList.SelectedIndex < 0) return null;
+        if (FeatList.SelectedIndex >= _selected.Features.Count) return null;
+        return _selected.Features[FeatList.SelectedIndex];
+    }
+
+    void LoadInspectorFromSelection()
+    {
+        var f = SelectedFeature();
+        if (f is null)
+        {
+            InspKind.Text = "未选特征";
+            InspXBox.Text = InspYBox.Text = InspDiaBox.Text = InspDepthBox.Text = InspWidthBox.Text = "";
+            return;
+        }
+        InspKind.Text = $"{f.FeatureId} · {f.Kind}";
+        InspXBox.Text = f.X.ToString("0.###");
+        InspYBox.Text = f.Y.ToString("0.###");
+        InspDiaBox.Text = f.DiameterMm?.ToString("0.###") ?? "";
+        InspDepthBox.Text = f.DepthMm?.ToString("0.###") ?? "";
+        InspWidthBox.Text = f.WidthMm?.ToString("0.###") ?? "";
+    }
+
+    void OnInspectApplyClick(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null) return;
+        var f = SelectedFeature();
+        if (f is null)
+        {
+            SetStatus("先选择特征");
+            return;
+        }
+        double? ParseOpt(string t) => double.TryParse(t, out var v) ? v : null;
+        var next = PanelEdit.UpdateFeatureParams(
+            _selected,
+            f.FeatureId,
+            x: ParseOpt(InspXBox.Text),
+            y: ParseOpt(InspYBox.Text),
+            diameterMm: ParseOpt(InspDiaBox.Text),
+            depthMm: ParseOpt(InspDepthBox.Text),
+            widthMm: ParseOpt(InspWidthBox.Text));
+        var idx = FeatList.SelectedIndex;
+        CommitPanel(next);
+        if (idx >= 0 && idx < FeatList.Items.Count)
+            FeatList.SelectedIndex = idx;
+    }
+
+    void OnUndoClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.TryUndo()) AfterHistoryRestore();
+        else SetStatus("没有可撤销的编辑");
+    }
+
+    void OnRedoClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.TryRedo()) AfterHistoryRestore();
+        else SetStatus("没有可重做的编辑");
+    }
 
     void CommitPanel(PanelPart next)
     {
