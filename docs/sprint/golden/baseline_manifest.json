@@ -1,0 +1,18 @@
+{
+  "schema": "cabinetnc.sprint-golden",
+  "schemaVersion": 1,
+  "createdAt": "2026-08-05T00:11:05.8053303\u002B08:00",
+  "source": "public/samples/demo_woodjob_120.zip",
+  "panels": 120,
+  "placements": 120,
+  "sheets": 19,
+  "unplaced": [],
+  "engine": "worker_blf_v0",
+  "profile": "nesting_router_6",
+  "files": [
+    "baseline_demo120.nc",
+    "baseline_demo120_S1.dxf",
+    "baseline_demo120_sheet.html",
+    "baseline_demo_cut_package.json"
+  ]
+}

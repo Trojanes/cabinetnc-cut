@@ -44,6 +44,27 @@ public static class CutPackageJson
                 quantity = p.Quantity,
                 grainDirection = p.GrainDirection,
                 allowedRotations = p.AllowedRotations,
+                projectId = p.Identity?.ProjectId,
+                moduleId = p.Identity?.ModuleId,
+                workpieceId = p.Identity?.WorkpieceId ?? p.PanelId,
+                side = p.Side,
+                notes = p.Notes,
+                orientation = p.Orientation is null ? null : new
+                {
+                    primaryFace = p.Orientation.PrimaryFace,
+                    millingFace = p.Orientation.MillingFace,
+                    grainDirection = p.Orientation.GrainDirection ?? p.GrainDirection,
+                    allowedRotations = p.Orientation.AllowedRotations ?? p.AllowedRotations,
+                    allowMirror = p.Orientation.AllowMirror,
+                    flipStrategy = p.Orientation.FlipStrategy,
+                },
+                edgeBanding = p.EdgeBanding is null ? null : new
+                {
+                    front = p.EdgeBanding.Front,
+                    back = p.EdgeBanding.Back,
+                    left = p.EdgeBanding.Left,
+                    right = p.EdgeBanding.Right,
+                },
                 outline = new
                 {
                     points = p.Outline.Points.Select(pt => new[] { pt.X, pt.Y }),

@@ -40,6 +40,37 @@ public class WoodJobImporterTests
         Assert.True(result.Package.Sheets[0].KerfMm > 0);
         var grainLocked = result.Package.Panels.First(p => p.GrainDirection == "Y");
         Assert.False(grainLocked.MayRotate90);
+        Assert.All(result.Package.Panels, p =>
+        {
+            Assert.NotNull(p.Identity);
+            Assert.Equal(p.PanelId, p.Identity!.WorkpieceId);
+            Assert.Equal(CutPackage.WoodJobFormat, p.Identity.SourceFormat);
+            Assert.True(p.ThicknessMm > 0);
+            Assert.NotNull(p.Orientation);
+        });
+    }
+
+    [Fact]
+    public void Rejects_missing_thickness_when_not_in_materials()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cabinetnc-wj-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "manifest.json"),
+                """{"format":"cabinetnc.woodjob","schemaVersion":2,"jobId":"T"}""");
+            File.WriteAllText(Path.Combine(dir, "parts.json"),
+                """
+                {"parts":[{"panelId":"P0","geometry":{"nestingPolygon":[[0,0],[100,0],[100,50],[0,50]]}}]}
+                """);
+            var result = WoodJobImporter.FromDirectory(dir);
+            Assert.False(result.Ok);
+            Assert.Contains(result.Errors, e => e.Code == "thickness");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best-effort */ }
+        }
     }
 
     [Fact]
@@ -51,5 +82,19 @@ public class WoodJobImporterTests
         var again = CutPackageImporter.FromJson(json);
         Assert.True(again.Ok, string.Join("; ", again.Errors.Select(e => e.Message)));
         Assert.Equal(120, again.Package!.Panels.Count);
+    }
+
+    [Fact]
+    public void Roundtrip_preserves_workpiece_contract_fields()
+    {
+        var imported = PackageImporter.FromPath(FixtureZip());
+        Assert.True(imported.Ok);
+        var json = CutPackageJson.Serialize(imported.Package!);
+        Assert.Contains("workpieceId", json);
+        Assert.Contains("orientation", json);
+        var again = CutPackageImporter.FromJson(json);
+        Assert.True(again.Ok, string.Join("; ", again.Errors.Select(e => e.Message)));
+        Assert.Equal(120, again.Package!.Panels.Count);
+        Assert.All(again.Package.Panels, p => Assert.NotNull(p.Identity?.WorkpieceId));
     }
 }

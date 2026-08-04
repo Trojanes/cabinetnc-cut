@@ -183,12 +183,41 @@ public static class CutPackageImporter
                 if (grain is null && p.TryGetProperty("orientation", out var ori2) && ori2.ValueKind == JsonValueKind.Object)
                     grain = TryGetString(ori2, "grainDirection");
 
+                string? primaryFace = null;
+                string? millingFace = null;
+                var allowMirror = false;
+                string? flipStrategy = null;
+                if (p.TryGetProperty("orientation", out var oriFace) && oriFace.ValueKind == JsonValueKind.Object)
+                {
+                    primaryFace = TryGetString(oriFace, "primaryFace") ?? TryGetString(oriFace, "faceUp");
+                    millingFace = TryGetString(oriFace, "millingFace") ?? TryGetString(oriFace, "millingSurface")
+                        ?? TryGetString(oriFace, "fromFace");
+                    allowMirror = oriFace.TryGetProperty("allowMirror", out var am) && am.ValueKind == JsonValueKind.True;
+                    flipStrategy = TryGetString(oriFace, "flipStrategy");
+                }
+
+                EdgeBanding? banding = null;
+                if (p.TryGetProperty("edgeBanding", out var eb) && eb.ValueKind == JsonValueKind.Object)
+                {
+                    banding = new EdgeBanding
+                    {
+                        Front = TryGetString(eb, "front"),
+                        Back = TryGetString(eb, "back"),
+                        Left = TryGetString(eb, "left"),
+                        Right = TryGetString(eb, "right"),
+                    };
+                }
+
+                var thickness = GetDouble(p, "thicknessMm");
+                if (thickness <= 0)
+                    errors.Add(new("thickness", $"{path}.thicknessMm", "thicknessMm must be > 0"));
+
                 panels.Add(new Panel
                 {
                     PanelId = panelId,
                     Name = TryGetString(p, "name"),
                     Material = TryGetString(p, "material") ?? TryGetString(p, "materialId"),
-                    ThicknessMm = GetDouble(p, "thicknessMm"),
+                    ThicknessMm = thickness,
                     Quantity = p.TryGetProperty("quantity", out var qEl) && qEl.TryGetInt32(out var q) ? Math.Max(1, q) : 1,
                     AllowedRotations = rotations,
                     GrainDirection = grain,
@@ -199,6 +228,25 @@ public static class CutPackageImporter
                         Frame = TryGetString(outlineEl, "frame") ?? "panelLocal",
                     },
                     Features = features,
+                    Identity = new WorkpieceIdentity
+                    {
+                        ProjectId = TryGetString(p, "projectId"),
+                        ModuleId = TryGetString(p, "moduleId"),
+                        WorkpieceId = TryGetString(p, "workpieceId") ?? panelId,
+                        SourceFormat = CutPackage.Schema,
+                    },
+                    Orientation = new WorkpieceOrientation
+                    {
+                        PrimaryFace = primaryFace,
+                        MillingFace = millingFace,
+                        GrainDirection = grain,
+                        AllowedRotations = rotations,
+                        AllowMirror = allowMirror,
+                        FlipStrategy = flipStrategy,
+                    },
+                    EdgeBanding = banding,
+                    Notes = TryGetString(p, "notes"),
+                    Side = TryGetString(p, "side") ?? primaryFace ?? millingFace,
                 });
                 i++;
             }

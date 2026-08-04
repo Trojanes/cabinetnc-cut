@@ -215,6 +215,42 @@ public static class WoodJobImporter
                 }
 
                 var qty = p.TryGetProperty("quantity", out var qEl) && qEl.TryGetInt32(out var q) ? Math.Max(1, q) : 1;
+
+                string? primaryFace = null;
+                string? millingFace = null;
+                var allowMirror = false;
+                string? flipStrategy = null;
+                if (p.TryGetProperty("orientation", out var oriFull) && oriFull.ValueKind == JsonValueKind.Object)
+                {
+                    primaryFace = TryGetString(oriFull, "primaryFace") ?? TryGetString(oriFull, "faceUp");
+                    millingFace = TryGetString(oriFull, "millingFace") ?? TryGetString(oriFull, "millingSurface")
+                        ?? TryGetString(oriFull, "fromFace");
+                    allowMirror = oriFull.TryGetProperty("allowMirror", out var am) && am.ValueKind == JsonValueKind.True;
+                    flipStrategy = TryGetString(oriFull, "flipStrategy");
+                    grain ??= TryGetString(oriFull, "grainDirection");
+                }
+
+                EdgeBanding? banding = null;
+                if (p.TryGetProperty("edgeBanding", out var eb) && eb.ValueKind == JsonValueKind.Object)
+                {
+                    banding = new EdgeBanding
+                    {
+                        Front = TryGetString(eb, "front"),
+                        Back = TryGetString(eb, "back"),
+                        Left = TryGetString(eb, "left"),
+                        Right = TryGetString(eb, "right"),
+                    };
+                }
+
+                if (thickness <= 0)
+                    errors.Add(new("thickness", $"{path}.thicknessMm", "thicknessMm must be > 0 (set on part or materials.json)"));
+
+                var projectId = TryGetString(p, "projectId");
+                var moduleId = TryGetString(p, "moduleId");
+                var workpieceId = TryGetString(p, "workpieceId") ?? panelId;
+                var side = TryGetString(p, "side") ?? primaryFace ?? millingFace;
+                var notes = TryGetString(p, "notes");
+
                 panels.Add(new Panel
                 {
                     PanelId = panelId,
@@ -226,6 +262,26 @@ public static class WoodJobImporter
                     GrainDirection = grain,
                     Outline = new Outline { Points = points, Closed = true, Frame = "panelLocal" },
                     Features = features,
+                    Identity = new WorkpieceIdentity
+                    {
+                        ProjectId = projectId,
+                        ModuleId = moduleId,
+                        WorkpieceId = workpieceId,
+                        SourcePath = partsPath,
+                        SourceFormat = CutPackage.WoodJobFormat,
+                    },
+                    Orientation = new WorkpieceOrientation
+                    {
+                        PrimaryFace = primaryFace,
+                        MillingFace = millingFace,
+                        GrainDirection = grain,
+                        AllowedRotations = rotations,
+                        AllowMirror = allowMirror,
+                        FlipStrategy = flipStrategy,
+                    },
+                    EdgeBanding = banding,
+                    Notes = notes,
+                    Side = side,
                 });
                 i++;
             }

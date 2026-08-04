@@ -16,7 +16,7 @@ public class SqliteProjectStoreTests
             var db = SqliteProjectStore.DbPathForFolder(dir);
             var store = new SqliteProjectStore();
             var pkgJson = """
-                {"schema":"cabinetnc.cut-package","schemaVersion":1,"panels":[{"panelId":"P1","outline":{"points":[[0,0],[10,0],[10,10],[0,10]],"closed":true},"features":[]}]}
+                {"schema":"cabinetnc.cut-package","schemaVersion":1,"panels":[{"panelId":"P1","thicknessMm":18,"outline":{"points":[[0,0],[10,0],[10,10],[0,10]],"closed":true},"features":[]}]}
                 """;
             var nest = SqliteProjectStore.SerializeNest([
                 new NestPlacementDto { PanelId = "P1", SheetIndex = 0, OffsetX = 15, OffsetY = 20, RotationDeg = 0 },

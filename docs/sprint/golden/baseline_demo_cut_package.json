@@ -1,0 +1,232 @@
+{
+  "schema": "cabinetnc.cut-package",
+  "schemaVersion": 1,
+  "exportedAt": "2026-07-18T11:09:30Z",
+  "source": {
+    "app": "CabinetNC",
+    "designName": "MVP Demo",
+    "exportId": "export-1784372970"
+  },
+  "units": "mm",
+  "sheets": [
+    {
+      "sheetId": "S1",
+      "material": "oak",
+      "colorTag": "oak",
+      "thicknessMm": 18.0,
+      "widthMm": 1220.0,
+      "lengthMm": 2440.0,
+      "trim": {
+        "left": 15.0,
+        "right": 15.0,
+        "front": 15.0,
+        "back": 15.0
+      }
+    }
+  ],
+  "panels": [
+    {
+      "panelId": "P1",
+      "name": "P1",
+      "boardType": "carcass",
+      "material": "oak",
+      "colorTag": "oak",
+      "thicknessMm": 18.0,
+      "bbox": {
+        "widthMm": 600.0,
+        "heightMm": 400.0
+      },
+      "rotatable": true,
+      "grainLocked": false,
+      "faceUp": "A",
+      "outline": {
+        "frame": "panelLocal",
+        "points": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            600.0,
+            0.0
+          ],
+          [
+            600.0,
+            400.0
+          ],
+          [
+            0.0,
+            400.0
+          ]
+        ],
+        "closed": true,
+        "source": "flatBody"
+      },
+      "features": [
+        {
+          "featureId": "H1",
+          "kind": "holeVertical",
+          "x": 80.0,
+          "y": 80.0,
+          "diameterMm": 35.0,
+          "depthMm": 13.0,
+          "fromFace": "A",
+          "toolHint": null,
+          "meta": {
+            "source": "metadata.features",
+            "role": null
+          }
+        },
+        {
+          "featureId": "G1",
+          "kind": "grooveVertical",
+          "path": [
+            [
+              0.0,
+              50.0
+            ],
+            [
+              600.0,
+              50.0
+            ]
+          ],
+          "widthMm": 6.0,
+          "depthMm": 8.0,
+          "fromFace": "A",
+          "toolHint": null,
+          "meta": {
+            "source": "metadata.features",
+            "role": null
+          }
+        }
+      ]
+    },
+    {
+      "panelId": "P2",
+      "name": "P2",
+      "boardType": "carcass",
+      "material": "oak",
+      "colorTag": "oak",
+      "thicknessMm": 18.0,
+      "bbox": {
+        "widthMm": 450.0,
+        "heightMm": 300.0
+      },
+      "rotatable": true,
+      "grainLocked": false,
+      "faceUp": "A",
+      "outline": {
+        "frame": "panelLocal",
+        "points": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            450.0,
+            0.0
+          ],
+          [
+            450.0,
+            300.0
+          ],
+          [
+            0.0,
+            300.0
+          ]
+        ],
+        "closed": true,
+        "source": "flatBody"
+      },
+      "features": [
+        {
+          "featureId": "H2",
+          "kind": "holeVertical",
+          "x": 40.0,
+          "y": 40.0,
+          "diameterMm": 8.0,
+          "depthMm": 12.0,
+          "fromFace": "A",
+          "toolHint": null,
+          "meta": {
+            "source": "metadata.features",
+            "role": null
+          }
+        }
+      ]
+    },
+    {
+      "panelId": "P3",
+      "name": "P3",
+      "boardType": "carcass",
+      "material": "oak",
+      "colorTag": "oak",
+      "thicknessMm": 18.0,
+      "bbox": {
+        "widthMm": 800.0,
+        "heightMm": 200.0
+      },
+      "rotatable": true,
+      "grainLocked": false,
+      "faceUp": "A",
+      "outline": {
+        "frame": "panelLocal",
+        "points": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            800.0,
+            0.0
+          ],
+          [
+            800.0,
+            200.0
+          ],
+          [
+            0.0,
+            200.0
+          ]
+        ],
+        "closed": true,
+        "source": "flatBody"
+      },
+      "features": []
+    }
+  ],
+  "nestSettings": {
+    "spacingMm": 12.0,
+    "borderMm": 15.0,
+    "allowRotation": true,
+    "allowPartsInPart": false
+  },
+  "nestResult": {
+    "engine": "sheet_pack_poly_v2",
+    "placements": [
+      {
+        "panelId": "P1",
+        "sheetIndex": 0,
+        "offsetX": 15.0,
+        "offsetY": 15.0,
+        "rotationDeg": 0.0
+      },
+      {
+        "panelId": "P2",
+        "sheetIndex": 0,
+        "offsetX": 630.0,
+        "offsetY": 15.0,
+        "rotationDeg": 0.0
+      },
+      {
+        "panelId": "P3",
+        "sheetIndex": 0,
+        "offsetX": 15.0,
+        "offsetY": 430.0,
+        "rotationDeg": 0.0
+      }
+    ],
+    "sheetCount": 1,
+    "unplacedCount": 0
+  }
+}

@@ -28,6 +28,15 @@ public sealed class Panel
     public required Outline Outline { get; init; }
     public IReadOnlyList<PanelFeature> Features { get; init; } = [];
 
+    /// <summary>Project/Module/Workpiece identity (optional; soft hierarchy).</summary>
+    public WorkpieceIdentity? Identity { get; init; }
+    /// <summary>Extended orientation (faces / mirror). Grain/rotations also mirrored on panel for compat.</summary>
+    public WorkpieceOrientation? Orientation { get; init; }
+    public EdgeBanding? EdgeBanding { get; init; }
+    public string? Notes { get; init; }
+    /// <summary>A / B side placeholder for dual-face CAM.</summary>
+    public string? Side { get; init; }
+
     /// <summary>True if 90° (or 270°) nest rotation is allowed.</summary>
     public bool MayRotate90 =>
         AllowedRotations is null
