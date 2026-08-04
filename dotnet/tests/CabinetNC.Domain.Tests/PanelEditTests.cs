@@ -57,4 +57,52 @@ public class PanelEditTests
         Assert.Equal("hole", hit!.Value.Type);
         Assert.Equal("H1", hit.Value.FeatureId);
     }
+
+    [Fact]
+    public void MirrorX_flips_coords_and_edge_banding()
+    {
+        var p = Rect();
+        p = new Panel
+        {
+            PanelId = p.PanelId,
+            ThicknessMm = p.ThicknessMm,
+            Outline = p.Outline,
+            Features = p.Features,
+            Side = "A",
+            EdgeBanding = new EdgeBanding { Left = "L", Right = "R", Front = "F", Back = "B" },
+            Orientation = new WorkpieceOrientation { MillingFace = "A", AllowMirror = true },
+        };
+        var next = PanelEdit.Mirror(p, "X");
+        var h = next.Features.Single(f => f.FeatureId == "H1");
+        Assert.Equal(520, h.X, 3); // 2*300 - 80
+        Assert.Equal(80, h.Y, 3);
+        Assert.Equal("R", next.EdgeBanding!.Left);
+        Assert.Equal("L", next.EdgeBanding.Right);
+        Assert.Equal("B", next.Side);
+        Assert.Equal("B", next.Orientation!.MillingFace);
+        Assert.Equal("x", next.Orientation.FlipStrategy);
+    }
+
+    [Fact]
+    public void Duplicate_assigns_new_ids()
+    {
+        var next = PanelEdit.Duplicate(Rect(), "P1_copy");
+        Assert.Equal("P1_copy", next.PanelId);
+        Assert.DoesNotContain(next.Features, f => f.FeatureId == "H1");
+        Assert.Contains(next.Features, f => f.FeatureId.StartsWith("H1"));
+        Assert.Equal(80, next.Features.First(f => f.FeatureId.StartsWith("H1")).X);
+    }
+
+    [Fact]
+    public void IsSmallPanel_by_short_edge()
+    {
+        var p = new Panel
+        {
+            PanelId = "S",
+            ThicknessMm = 18,
+            Outline = new Outline { Points = [new(0, 0), new(70, 0), new(70, 200), new(0, 200)] },
+        };
+        Assert.True(PanelEdit.IsSmallPanel(p, out var reason));
+        Assert.Contains("80", reason);
+    }
 }

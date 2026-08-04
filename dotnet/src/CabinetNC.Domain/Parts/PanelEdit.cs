@@ -210,6 +210,211 @@ public static class PanelEdit
         return ClonePanel(panel, feats);
     }
 
+    public static Panel RemoveFeature(Panel panel, string featureId)
+    {
+        var feats = panel.Features.Where(f => f.FeatureId != featureId).ToList();
+        return ClonePanel(panel, feats);
+    }
+
+    /// <summary>Mirror about panel bbox center. axis "X" flips X; "Y" flips Y.</summary>
+    public static Panel Mirror(Panel panel, string axis)
+    {
+        var ax = axis.Trim().ToUpperInvariant();
+        var (minX, minY, maxX, maxY, _, _) = BBox(panel);
+        var cx = (minX + maxX) / 2;
+        var cy = (minY + maxY) / 2;
+        Point2 Map(Point2 p) => ax switch
+        {
+            "X" => new Point2(2 * cx - p.X, p.Y),
+            "Y" => new Point2(p.X, 2 * cy - p.Y),
+            _ => p,
+        };
+
+        var outline = new Outline
+        {
+            Points = panel.Outline.Points.Select(Map).ToList(),
+            Closed = panel.Outline.Closed,
+            Frame = panel.Outline.Frame,
+        };
+        var feats = panel.Features.Select(f =>
+        {
+            if (IsHole(f))
+            {
+                var q = Map(new Point2(f.X, f.Y));
+                return CloneFeature(f, x: q.X, y: q.Y);
+            }
+            if (IsGroove(f) && f.Path is not null)
+                return CloneFeature(f, path: f.Path.Select(Map).ToList());
+            return f;
+        }).ToList();
+
+        var banding = panel.EdgeBanding;
+        if (banding is not null)
+        {
+            banding = ax switch
+            {
+                "X" => new EdgeBanding
+                {
+                    Front = banding.Front,
+                    Back = banding.Back,
+                    Left = banding.Right,
+                    Right = banding.Left,
+                },
+                "Y" => new EdgeBanding
+                {
+                    Front = banding.Back,
+                    Back = banding.Front,
+                    Left = banding.Left,
+                    Right = banding.Right,
+                },
+                _ => banding,
+            };
+        }
+
+        var side = FlipFace(panel.Side);
+        var orient = panel.Orientation;
+        if (orient is not null)
+        {
+            orient = new WorkpieceOrientation
+            {
+                PrimaryFace = FlipFace(orient.PrimaryFace) ?? orient.PrimaryFace,
+                MillingFace = FlipFace(orient.MillingFace) ?? orient.MillingFace,
+                GrainDirection = orient.GrainDirection,
+                AllowedRotations = orient.AllowedRotations,
+                AllowMirror = orient.AllowMirror,
+                FlipStrategy = ax is "X" or "Y" ? ax.ToLowerInvariant() : orient.FlipStrategy,
+            };
+        }
+
+        return new Panel
+        {
+            PanelId = panel.PanelId,
+            Name = panel.Name,
+            Material = panel.Material,
+            ThicknessMm = panel.ThicknessMm,
+            Quantity = panel.Quantity,
+            AllowedRotations = panel.AllowedRotations,
+            GrainDirection = panel.GrainDirection,
+            Outline = outline,
+            Features = feats,
+            Identity = panel.Identity,
+            Orientation = orient,
+            EdgeBanding = banding,
+            Notes = panel.Notes,
+            Side = side ?? panel.Side,
+        };
+    }
+
+    /// <summary>Deep-ish copy with a new PanelId; feature IDs get a unique suffix.</summary>
+    public static Panel Duplicate(Panel panel, string newPanelId)
+    {
+        var feats = panel.Features.Select(f => new PanelFeature
+        {
+            FeatureId = $"{f.FeatureId}_c",
+            Kind = f.Kind,
+            X = f.X,
+            Y = f.Y,
+            DiameterMm = f.DiameterMm,
+            DepthMm = f.DepthMm,
+            WidthMm = f.WidthMm,
+            Path = f.Path?.ToList(),
+        }).ToList();
+        // ensure unique feature ids within panel
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < feats.Count; i++)
+        {
+            var id = feats[i].FeatureId;
+            var n = 1;
+            while (!used.Add(id))
+                id = $"{feats[i].FeatureId}{n++}";
+            if (id != feats[i].FeatureId)
+                feats[i] = new PanelFeature
+                {
+                    FeatureId = id,
+                    Kind = feats[i].Kind,
+                    X = feats[i].X,
+                    Y = feats[i].Y,
+                    DiameterMm = feats[i].DiameterMm,
+                    DepthMm = feats[i].DepthMm,
+                    WidthMm = feats[i].WidthMm,
+                    Path = feats[i].Path,
+                };
+        }
+
+        WorkpieceIdentity? identity = panel.Identity is null
+            ? null
+            : new WorkpieceIdentity
+            {
+                ProjectId = panel.Identity.ProjectId,
+                ModuleId = panel.Identity.ModuleId,
+                WorkpieceId = newPanelId,
+                SourcePath = panel.Identity.SourcePath,
+                SourceFormat = panel.Identity.SourceFormat,
+            };
+
+        return new Panel
+        {
+            PanelId = newPanelId,
+            Name = panel.Name is null ? null : $"{panel.Name} (copy)",
+            Material = panel.Material,
+            ThicknessMm = panel.ThicknessMm,
+            Quantity = panel.Quantity,
+            AllowedRotations = panel.AllowedRotations,
+            GrainDirection = panel.GrainDirection,
+            Outline = new Outline
+            {
+                Points = panel.Outline.Points.ToList(),
+                Closed = panel.Outline.Closed,
+                Frame = panel.Outline.Frame,
+            },
+            Features = feats,
+            Identity = identity,
+            Orientation = panel.Orientation,
+            EdgeBanding = panel.EdgeBanding is null
+                ? null
+                : new EdgeBanding
+                {
+                    Front = panel.EdgeBanding.Front,
+                    Back = panel.EdgeBanding.Back,
+                    Left = panel.EdgeBanding.Left,
+                    Right = panel.EdgeBanding.Right,
+                },
+            Notes = panel.Notes,
+            Side = panel.Side,
+        };
+    }
+
+    /// <summary>ASSUMED Day4: shortest edge &lt; 80 mm or area &lt; 0.02 m².</summary>
+    public static bool IsSmallPanel(Panel panel, out string reason)
+    {
+        var (_, _, _, _, w, h) = BBox(panel);
+        var shortEdge = Math.Min(w, h);
+        var areaM2 = (w * h) / 1_000_000.0;
+        if (shortEdge < 80)
+        {
+            reason = $"最短边 {shortEdge:0.#} mm < 80 mm";
+            return true;
+        }
+        if (areaM2 < 0.02)
+        {
+            reason = $"面积 {areaM2:0.####} m² < 0.02 m²";
+            return true;
+        }
+        reason = "";
+        return false;
+    }
+
+    static string? FlipFace(string? face)
+    {
+        if (string.IsNullOrWhiteSpace(face)) return face;
+        return face.Trim().ToUpperInvariant() switch
+        {
+            "A" => "B",
+            "B" => "A",
+            _ => face,
+        };
+    }
+
     public static bool IsHole(PanelFeature f) =>
         f.Kind.Contains("hole", StringComparison.OrdinalIgnoreCase);
 

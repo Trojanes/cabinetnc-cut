@@ -160,7 +160,19 @@
                   <TextBlock Text="工程" Style="{StaticResource RailH2}" Margin="0,0,0,4" />
                   <TextBlock x:Name="PackageMeta" Text="尚未加载" TextWrapping="Wrap" FontSize="12" Foreground="#888" Margin="0,0,0,8" />
                   <TextBlock Text="板件" Style="{StaticResource RailH2}" />
-                  <ListBox x:Name="PartList" BorderThickness="0" Background="Transparent" SelectionChanged="OnPartSelected" FontSize="12" />
+                  <ListBox x:Name="PartList" BorderThickness="0" Background="Transparent" SelectionChanged="OnPartSelected" FontSize="12">
+                    <ListBox.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="复制 (Ctrl+C)" Click="OnGeomDuplicateClick" />
+                        <MenuItem Header="粘贴 (Ctrl+V)" Click="OnPastePanelClick" />
+                        <MenuItem Header="剪切 (Ctrl+X)" Click="OnCutPanelClick" />
+                        <MenuItem Header="删除整板 (Del)" Click="OnDeletePanelClick" />
+                        <Separator />
+                        <MenuItem Header="镜像 X" Click="OnGeomMirrorXClick" />
+                        <MenuItem Header="镜像 Y" Click="OnGeomMirrorYClick" />
+                      </ContextMenu>
+                    </ListBox.ContextMenu>
+                  </ListBox>
                   <TextBlock Text="告警" Style="{StaticResource RailH2}" />
                   <ListBox x:Name="WarnList" BorderThickness="0" Background="Transparent" FontSize="11" Foreground="#886644" />
                 </StackPanel>
@@ -204,12 +216,30 @@
                     <Button Content="旋转90°" Click="OnGeomRotClick" Padding="8,4" Margin="0,0,4,4" />
                     <Button Content="+孔⌀8" Click="OnGeomHoleClick" Padding="8,4" Margin="0,0,4,4" />
                     <Button Content="+槽" Click="OnGeomGrooveClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="镜像X" Click="OnGeomMirrorXClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="镜像Y" Click="OnGeomMirrorYClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="复制板" Click="OnGeomDuplicateClick" Padding="8,4" Margin="0,0,4,4" />
+                    <Button Content="删特征" Click="OnGeomDeleteFeatureClick" Padding="8,4" Margin="0,0,4,4" />
                     <Button Content="撤销" Click="OnUndoClick" Padding="8,4" Margin="0,0,4,4" />
                     <Button Content="重做" Click="OnRedoClick" Padding="8,4" Margin="0,0,4,4" />
                   </WrapPanel>
+                  <TextBlock x:Name="SmallPanelWarn" Text="" TextWrapping="Wrap" FontSize="11" Foreground="#B91C1C" Margin="0,0,0,8" Visibility="Collapsed" />
                   <TextBlock Text="特征" Style="{StaticResource RailH2}" />
                   <ListBox x:Name="FeatList" BorderThickness="0" Background="Transparent" FontSize="12" MinHeight="60"
-                           SelectionChanged="OnFeatListChanged" />
+                           SelectionChanged="OnFeatListChanged">
+                    <ListBox.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="复制板件 (Ctrl+C)" Click="OnGeomDuplicateClick" />
+                        <MenuItem Header="粘贴板件 (Ctrl+V)" Click="OnPastePanelClick" />
+                        <MenuItem Header="剪切板件 (Ctrl+X)" Click="OnCutPanelClick" />
+                        <Separator />
+                        <MenuItem Header="镜像 X" Click="OnGeomMirrorXClick" />
+                        <MenuItem Header="镜像 Y" Click="OnGeomMirrorYClick" />
+                        <MenuItem Header="删除特征 (Del)" Click="OnGeomDeleteFeatureClick" />
+                        <MenuItem Header="删除整板" Click="OnDeletePanelClick" />
+                      </ContextMenu>
+                    </ListBox.ContextMenu>
+                  </ListBox>
                   <Border Background="#EEE" Padding="8" Margin="0,8,0,0" CornerRadius="4">
                     <StackPanel>
                       <TextBlock Text="特征 Inspector" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6" />

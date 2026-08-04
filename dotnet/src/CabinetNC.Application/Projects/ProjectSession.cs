@@ -64,6 +64,26 @@ public sealed class ProjectSession
         ManufacturingDirty = true;
     }
 
+    public void RemovePanel(string panelId, bool recordHistory = true)
+    {
+        if (Package is null) return;
+        if (recordHistory)
+            History.PushBeforeEdit(PackageJson ?? CutPackageJson.Serialize(Package));
+        Package = Package.WithoutPanel(panelId);
+        PackageJson = CutPackageJson.Serialize(Package);
+        ManufacturingDirty = true;
+    }
+
+    public string NextCopyPanelId(string baseId)
+    {
+        if (Package is null) return $"{baseId}_copy";
+        var n = 1;
+        string id;
+        do { id = n == 1 ? $"{baseId}_copy" : $"{baseId}_copy{n}"; n++; }
+        while (Package.Panels.Any(p => p.PanelId.Equals(id, StringComparison.OrdinalIgnoreCase)));
+        return id;
+    }
+
     public void MarkManufacturingClean() => ManufacturingDirty = false;
 
     public bool TryUndo()

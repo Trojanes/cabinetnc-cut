@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     WorkshopLibrary _library = WorkshopLibraryStore.Load();
     readonly HashSet<string> _locked = new(StringComparer.Ordinal);
     PanelPart? _selected;
+    PanelPart? _clipboardPanel;
     StartNestingReply? _nest;
     bool _showNest;
     string _stage = "load";
@@ -103,22 +104,49 @@ public partial class MainWindow : Window
 
     void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (Keyboard.Modifiers != ModifierKeys.Control) return;
-        if (e.Key == Key.Z)
+        if (Keyboard.Modifiers == ModifierKeys.Control)
         {
-            if (_session.TryUndo())
+            if (e.Key == Key.Z)
             {
-                AfterHistoryRestore();
+                if (_session.TryUndo())
+                {
+                    AfterHistoryRestore();
+                    e.Handled = true;
+                }
+            }
+            else if (e.Key == Key.Y)
+            {
+                if (_session.TryRedo())
+                {
+                    AfterHistoryRestore();
+                    e.Handled = true;
+                }
+            }
+            else if (e.Key == Key.C)
+            {
+                CopySelectedToClipboard();
                 e.Handled = true;
             }
+            else if (e.Key == Key.X)
+            {
+                CutSelectedPanel();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.V)
+            {
+                PasteClipboardPanel();
+                e.Handled = true;
+            }
+            return;
         }
-        else if (e.Key == Key.Y)
+
+        if (e.Key == Key.Delete)
         {
-            if (_session.TryRedo())
-            {
-                AfterHistoryRestore();
-                e.Handled = true;
-            }
+            if (SelectedFeature() is not null)
+                OnGeomDeleteFeatureClick(sender, e);
+            else
+                OnDeletePanelClick(sender, e);
+            e.Handled = true;
         }
     }
 
@@ -1075,6 +1103,7 @@ public partial class MainWindow : Window
             GeomMeta.Text = "选板后可编辑";
             InspKind.Text = "未选特征";
             DirtyBanner.Visibility = Visibility.Collapsed;
+            SmallPanelWarn.Visibility = Visibility.Collapsed;
             return;
         }
         var box = PanelEdit.BBox(_selected);
@@ -1089,6 +1118,16 @@ public partial class MainWindow : Window
             ? "Nest/CAM 已失效 — 请重新密排后再导出"
             : "";
         DirtyBanner.Visibility = _session.ManufacturingDirty ? Visibility.Visible : Visibility.Collapsed;
+        if (PanelEdit.IsSmallPanel(_selected, out var smallReason))
+        {
+            SmallPanelWarn.Text = $"小板警告：{smallReason}";
+            SmallPanelWarn.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            SmallPanelWarn.Text = "";
+            SmallPanelWarn.Visibility = Visibility.Collapsed;
+        }
         foreach (var f in _selected.Features)
         {
             if (PanelEdit.IsHole(f))
@@ -1202,14 +1241,14 @@ public partial class MainWindow : Window
     {
         if (_selected is null) return;
         CommitPanel(PanelEdit.TranslateFeatures(_selected, 10, 0));
-        SetStatus($"geom 路 鐗瑰緛鍙崇Щ 10mm 路 {_selected.PanelId}");
+        SetStatus($"特征右移 10mm · {_selected.PanelId}");
     }
 
     void OnGeomRotClick(object sender, RoutedEventArgs e)
     {
         if (_selected is null) return;
         CommitPanel(PanelEdit.RotatePanel(_selected, 90));
-        SetStatus($"geom 路 鏃嬭浆 90掳 路 {_selected.PanelId}");
+        SetStatus($"旋转 90° · {_selected.PanelId}");
     }
 
     void OnGeomHoleClick(object sender, RoutedEventArgs e)
@@ -1217,7 +1256,7 @@ public partial class MainWindow : Window
         if (_selected is null) return;
         var box = PanelEdit.BBox(_selected);
         CommitPanel(PanelEdit.AddVerticalHole(_selected, box.MinX + box.W / 2, box.MinY + box.H / 2));
-        SetStatus($"geom 路 鍔犲瓟 路 {_selected.PanelId}");
+        SetStatus($"已加孔 · {_selected.PanelId}");
     }
 
     void OnGeomGrooveClick(object sender, RoutedEventArgs e)
@@ -1226,33 +1265,139 @@ public partial class MainWindow : Window
         var box = PanelEdit.BBox(_selected);
         var y = box.MinY + box.H * 0.25;
         CommitPanel(PanelEdit.AddVerticalGroove(_selected, [new Point2(box.MinX, y), new Point2(box.MaxX, y)]));
-        SetStatus($"geom 路 鍔犳Ы 路 {_selected.PanelId}");
+        SetStatus($"已加槽 · {_selected.PanelId}");
+    }
+
+    void OnGeomMirrorXClick(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null) return;
+        CommitPanel(PanelEdit.Mirror(_selected, "X"));
+        SetStatus($"镜像 X · {_selected.PanelId}");
+    }
+
+    void OnGeomMirrorYClick(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null) return;
+        CommitPanel(PanelEdit.Mirror(_selected, "Y"));
+        SetStatus($"镜像 Y · {_selected.PanelId}");
+    }
+
+    void OnGeomDuplicateClick(object sender, RoutedEventArgs e) => DuplicateSelectedPanel();
+
+    void OnPastePanelClick(object sender, RoutedEventArgs e) => PasteClipboardPanel();
+
+    void OnCutPanelClick(object sender, RoutedEventArgs e) => CutSelectedPanel();
+
+    void OnGeomDeleteFeatureClick(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null) return;
+        var f = SelectedFeature();
+        if (f is null)
+        {
+            SetStatus("先选择要删除的特征");
+            return;
+        }
+        CommitPanel(PanelEdit.RemoveFeature(_selected, f.FeatureId));
+        SetStatus($"已删特征 {f.FeatureId}");
+    }
+
+    void OnDeletePanelClick(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null || _session.Package is null) return;
+        var id = _selected.PanelId;
+        _session.RemovePanel(id);
+        InvalidateManufacturingOutputs("delete panel");
+        RefreshPartList(selectId: null);
+        SetStatus($"已删除板件 {id}");
+    }
+
+    void CopySelectedToClipboard()
+    {
+        if (_selected is null) return;
+        _clipboardPanel = PanelEdit.Duplicate(_selected, _selected.PanelId);
+        SetStatus($"已复制 {_selected.PanelId}（Ctrl+V 粘贴）");
+    }
+
+    void CutSelectedPanel()
+    {
+        if (_selected is null) return;
+        CopySelectedToClipboard();
+        OnDeletePanelClick(this, new RoutedEventArgs());
+    }
+
+    void PasteClipboardPanel()
+    {
+        if (_clipboardPanel is null || _session.Package is null)
+        {
+            SetStatus("剪贴板为空");
+            return;
+        }
+        var id = _session.NextCopyPanelId(StripCopySuffix(_clipboardPanel.PanelId));
+        var copy = PanelEdit.Duplicate(_clipboardPanel, id);
+        _session.ReplacePanel(copy);
+        InvalidateManufacturingOutputs("paste panel");
+        RefreshPartList(selectId: id);
+        SetStatus($"已粘贴 {id}");
+    }
+
+    void DuplicateSelectedPanel()
+    {
+        if (_selected is null || _session.Package is null) return;
+        CopySelectedToClipboard();
+        var id = _session.NextCopyPanelId(_selected.PanelId);
+        var copy = PanelEdit.Duplicate(_selected, id);
+        _session.ReplacePanel(copy);
+        InvalidateManufacturingOutputs("duplicate panel");
+        RefreshPartList(selectId: id);
+        SetStatus($"已复制为 {id}");
+    }
+
+    static string StripCopySuffix(string id)
+    {
+        var idx = id.IndexOf("_copy", StringComparison.OrdinalIgnoreCase);
+        return idx > 0 ? id[..idx] : id;
+    }
+
+    void RefreshPartList(string? selectId)
+    {
+        PartList.Items.Clear();
+        if (_session.Package is not null)
+            foreach (var p in _session.Package.Panels)
+                PartList.Items.Add(p);
+        _selected = PartList.Items.OfType<PanelPart>().FirstOrDefault(p => p.PanelId == selectId)
+            ?? PartList.Items.OfType<PanelPart>().FirstOrDefault();
+        if (_selected is not null)
+            PartList.SelectedItem = _selected;
+        RefreshGeomRail();
+        RefreshNestReport();
+        UpdateCanvasHint();
+        CanvasHost.InvalidateVisual();
     }
 
     void OnLockPlaceClick(object sender, RoutedEventArgs e)
     {
         if (_selected is null || _nest is not { Ok: true })
         {
-            SetStatus("鏃犳憜浣嶅彲閿佸畾");
+            SetStatus("无摆位可锁定");
             return;
         }
         var id = _selected.PanelId;
         if (!_nest.Placements.Any(p => p.PanelId == id))
         {
-            SetStatus("閫変腑鏉挎湭鎺掔増");
+            SetStatus("选中板未排版");
             return;
         }
         if (_locked.Contains(id))
         {
             _locked.Remove(id);
-            LockPlaceBtn.Content = "閿佸畾鎽嗕綅";
-            SetStatus("updated");
+            LockPlaceBtn.Content = "锁定摆位";
+            SetStatus($"已解锁摆位 · {id}");
         }
         else
         {
             _locked.Add(id);
-            LockPlaceBtn.Content = "瑙ｉ攣鎽嗕綅";
-            SetStatus("updated");
+            LockPlaceBtn.Content = "解锁摆位";
+            SetStatus($"已锁定摆位 · {id}");
         }
         CanvasHost.InvalidateVisual();
     }
@@ -1659,7 +1804,7 @@ public partial class MainWindow : Window
     {
         if (_session.Package is null || string.IsNullOrWhiteSpace(_session.PackageJson))
         {
-            SetStatus("Nothing to save 鈥?open a cut-package first");
+            SetStatus("Nothing to save — open a cut-package first");
             return;
         }
 
@@ -1698,7 +1843,7 @@ public partial class MainWindow : Window
         });
         _session.SetProjectDbPath(dlg.FileName);
         _session.MachineId = SelectedMachineId();
-        SetStatus($"Saved project 鈫?{dlg.FileName}");
+        SetStatus($"Saved project → {dlg.FileName}");
     }
 
     async void OnPingClick(object sender, RoutedEventArgs e) => await RefreshWorkerAsync();
@@ -2009,14 +2154,14 @@ public partial class MainWindow : Window
             if (hit is null || hit.Value.Type == "panel")
             {
                 _dragMode = null;
-                SetStatus("鍑犱綍: 鐐硅摑鑹插瓟蹇?/ 绾㈣壊妲界 / 榛戣竟鎵嬫焺鍐嶆嫋");
+                SetStatus("几何: 点蓝色孔心 / 红色槽端 / 黑边手柄再拖");
                 return;
             }
             _dragMode = "geom";
             _geomHit = hit;
             _geomStart = _selected;
             CanvasPane.CaptureMouse();
-            SetStatus($"鎷栧姩 {hit.Value.Type}");
+            SetStatus($"拖动 {hit.Value.Type}");
             e.Handled = true;
             return;
         }
@@ -2027,8 +2172,7 @@ public partial class MainWindow : Window
             var hitId = HitTestNest(x, y);
             if (hitId is null)
             {
-            // encoding-fixed removed: broken string
-            SetStatus("updated");
+                SetStatus("未点中板件");
                 return;
             }
             var place = _nest.Placements.FirstOrDefault(p => p.PanelId == hitId);
@@ -2043,12 +2187,12 @@ public partial class MainWindow : Window
             }
             if (_stage == "ops")
             {
-                SetStatus($"閫変腑 {hitId}");
+                SetStatus($"选中 {hitId}");
                 return;
             }
             if (_locked.Contains(hitId))
             {
-            SetStatus("updated");
+                SetStatus($"已锁定 · {hitId}");
                 return;
             }
             var (mx, my) = ScreenToSheet(x, y);
@@ -2059,7 +2203,7 @@ public partial class MainWindow : Window
             _nestOrigOx = place.OffsetX;
             _nestOrigOy = place.OffsetY;
             CanvasPane.CaptureMouse();
-            SetStatus($"鎷栨憜浣?{hitId}");
+            SetStatus($"拖摆位 {hitId}");
             e.Handled = true;
         }
     }

@@ -27,7 +27,17 @@ public sealed class CutPackage
         var i = list.FindIndex(p => p.PanelId == panel.PanelId);
         if (i >= 0) list[i] = panel;
         else list.Add(panel);
-        return new CutPackage
+        return CloneWithPanels(list);
+    }
+
+    public CutPackage WithoutPanel(string panelId)
+    {
+        var list = Panels.Where(p => p.PanelId != panelId).ToList();
+        return CloneWithPanels(list);
+    }
+
+    CutPackage CloneWithPanels(IReadOnlyList<Panel> list) =>
+        new()
         {
             SchemaName = SchemaName,
             Version = Version,
@@ -36,5 +46,4 @@ public sealed class CutPackage
             Sheets = Sheets,
             Panels = list,
         };
-    }
 }
