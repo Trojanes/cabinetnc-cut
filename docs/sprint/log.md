@@ -10,3 +10,4 @@
 | 2026-08-05 | Day 8: CamSafety order + per-panel depths |
 | 2026-08-05 | Day 9: PocketClearer zigzag + small_panel warn |
 | 2026-08-05 | Day 10: per-sheet bundle + IPostProcessor |
+| 2026-08-05 | Day 11 PARTIAL: DoubleSideGate no_registration |

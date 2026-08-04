@@ -61,4 +61,21 @@ public class SheetBundleBuilderTests
         Assert.Equal(3, bundle.Sheets.Select(s => s.NcFileName).Distinct().Count());
         Assert.All(bundle.Sheets, s => Assert.False(string.IsNullOrWhiteSpace(s.DxfText)));
     }
+
+    [Fact]
+    public void Fanuc_post_ends_with_M30()
+    {
+        var post = new FanucLikePostProcessor();
+        var nc = post.Emit(
+            [
+                new CutOp
+                {
+                    Op = "contour", PanelId = "P", Placed = true, ToolId = "T1",
+                    DepthMm = 18.5, Path = [(0, 0), (10, 0), (10, 10), (0, 10)],
+                },
+            ],
+            MachineCatalog.Get("fanuc_like_m30"));
+        Assert.Contains("M30", nc);
+        Assert.Equal("fanuc_like", post.Id);
+    }
 }

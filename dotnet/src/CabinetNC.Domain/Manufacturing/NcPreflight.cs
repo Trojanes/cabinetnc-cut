@@ -18,7 +18,8 @@ public static class NcPreflight
         MachineProfile profile,
         double sheetWidthMm,
         double sheetLengthMm,
-        IReadOnlyDictionary<string, Parts.Panel>? panelsById = null)
+        IReadOnlyDictionary<string, Parts.Panel>? panelsById = null,
+        FaceRegistration? registration = null)
     {
         var issues = new List<PreflightIssue>();
         var placed = ops.Where(o => o.Placed).ToList();
@@ -69,6 +70,9 @@ public static class NcPreflight
                 }
             }
         }
+
+        // Dual-face: B ops require registration (Day 11). Default session has no strategy → block B.
+        issues.AddRange(DoubleSideGate.CheckBackSideOps(placed, registration));
 
         var ok = issues.All(i => i.Level != "error");
         return new PreflightReport { Ok = ok, Issues = issues };
