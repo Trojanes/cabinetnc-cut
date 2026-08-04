@@ -14,6 +14,10 @@ public sealed class ProjectSession
     public IReadOnlyList<ValidationIssue> LastWarnings { get; private set; } = [];
     public IReadOnlyList<ValidationIssue> LastErrors { get; private set; } = [];
 
+    /// <summary>True after geom/feature edits until nest/CAM are rebuilt.</summary>
+    public bool ManufacturingDirty { get; private set; }
+    public EditHistory History { get; } = new();
+
     public PackageImportResult OpenPackageFile(string path)
     {
         var result = PackageImporter.FromPath(path);
@@ -26,6 +30,8 @@ public sealed class ProjectSession
             PackageJson = CutPackageJson.Serialize(result.Package);
             SourcePath = path;
             ProjectDbPath = null;
+            ManufacturingDirty = false;
+            History.Clear();
         }
         return result;
     }
@@ -40,17 +46,52 @@ public sealed class ProjectSession
             Package = result.Package;
             PackageJson = json;
             SourcePath = sourceLabel;
+            ManufacturingDirty = false;
+            History.Clear();
         }
         return result;
     }
 
     public void SetProjectDbPath(string? path) => ProjectDbPath = path;
 
-    public void ReplacePanel(Panel panel)
+    public void ReplacePanel(Panel panel, bool recordHistory = true)
     {
         if (Package is null) return;
+        if (recordHistory)
+            History.PushBeforeEdit(PackageJson ?? CutPackageJson.Serialize(Package));
         Package = Package.WithPanel(panel);
-        // ponytail: PackageJson stays stale until Save; geom edits are in-memory until project save.
+        PackageJson = CutPackageJson.Serialize(Package);
+        ManufacturingDirty = true;
+    }
+
+    public void MarkManufacturingClean() => ManufacturingDirty = false;
+
+    public bool TryUndo()
+    {
+        if (Package is null) return false;
+        var current = PackageJson ?? CutPackageJson.Serialize(Package);
+        var prev = History.Undo(current);
+        if (prev is null) return false;
+        return ApplySnapshot(prev);
+    }
+
+    public bool TryRedo()
+    {
+        if (Package is null) return false;
+        var current = PackageJson ?? CutPackageJson.Serialize(Package);
+        var next = History.Redo(current);
+        if (next is null) return false;
+        return ApplySnapshot(next);
+    }
+
+    bool ApplySnapshot(string json)
+    {
+        var result = CutPackageImporter.FromJson(json);
+        if (!result.Ok || result.Package is null) return false;
+        Package = result.Package;
+        PackageJson = json;
+        ManufacturingDirty = true;
+        return true;
     }
 
     public void Clear()
@@ -61,5 +102,7 @@ public sealed class ProjectSession
         ProjectDbPath = null;
         LastWarnings = [];
         LastErrors = [];
+        ManufacturingDirty = false;
+        History.Clear();
     }
 }

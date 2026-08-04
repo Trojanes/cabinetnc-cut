@@ -79,6 +79,7 @@ public partial class MainWindow : Window
         RefreshWorkflowDots();
         RefreshEmptyState();
         _camTimer.Tick += (_, _) => StepCam(1);
+        PreviewKeyDown += OnPreviewKeyDown;
 
         Loaded += async (_, _) =>
         {
@@ -99,6 +100,44 @@ public partial class MainWindow : Window
         MachineCombo.SelectedValue as string
         ?? (MachineCombo.SelectedItem as MachineProfile)?.Id
         ?? "nesting_router_6";
+
+    void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Control) return;
+        if (e.Key == Key.Z)
+        {
+            if (_session.TryUndo())
+            {
+                AfterHistoryRestore();
+                e.Handled = true;
+            }
+        }
+        else if (e.Key == Key.Y)
+        {
+            if (_session.TryRedo())
+            {
+                AfterHistoryRestore();
+                e.Handled = true;
+            }
+        }
+    }
+
+    void AfterHistoryRestore()
+    {
+        InvalidateManufacturingOutputs("undo/redo");
+        PartList.Items.Clear();
+        if (_session.Package is not null)
+            foreach (var p in _session.Package.Panels)
+                PartList.Items.Add(p);
+        _selected = PartList.Items.OfType<PanelPart>().FirstOrDefault(p => p.PanelId == _selected?.PanelId)
+            ?? PartList.Items.OfType<PanelPart>().FirstOrDefault();
+        if (_selected is not null)
+            PartList.SelectedItem = _selected;
+        RefreshGeomRail();
+        RefreshNestReport();
+        UpdateCanvasHint();
+        CanvasHost.InvalidateVisual();
+    }
 
     void OnStageChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -1059,8 +1098,7 @@ public partial class MainWindow : Window
     {
         _session.ReplacePanel(next);
         _selected = next;
-        _nest = null; // geom write-back clears nest 鈥?same as Vite
-        _showNest = _stage is "nest" or "ops";
+        InvalidateManufacturingOutputs("geom write-back");
         // refresh list item reference
         var idx = PartList.SelectedIndex;
         PartList.Items.Clear();
@@ -1073,6 +1111,17 @@ public partial class MainWindow : Window
         RefreshNestReport();
         UpdateCanvasHint();
         CanvasHost.InvalidateVisual();
+    }
+
+    void InvalidateManufacturingOutputs(string reason)
+    {
+        _nest = null;
+        _opsOverlay = [];
+        _showNest = _stage is "nest" or "ops";
+        NcPreview.Text = "";
+        SetStatus($"已编辑 · Nest/CAM 已失效（{reason}）· 请重新密排");
+        RefreshWorkflowDots();
+        RefreshOneClickExport();
     }
 
     void OnGeomMoveClick(object sender, RoutedEventArgs e)
@@ -1239,6 +1288,7 @@ public partial class MainWindow : Window
             ApplyStageVisibility();
             UpdateCanvasHint();
             RebuildOpsOverlay();
+            _session.MarkManufacturingClean();
 
             var opsNote = "";
             var ncNote = "";
@@ -1600,6 +1650,15 @@ public partial class MainWindow : Window
 
     bool GuardExportPreflight()
     {
+        if (_session.ManufacturingDirty || _nest is not { Ok: true })
+        {
+            MessageBox.Show(this,
+                "板件已编辑，或尚未完成有效密排。\n请重新密排并生成刀路后再导出。",
+                "Nest/CAM 已失效",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return false;
+        }
         RebuildOpsOverlay();
         var report = RunPreflight();
         RefreshPreflightMeta();
