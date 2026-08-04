@@ -7,3 +7,4 @@
 | 2026-08-05 | Day 5: grouped BLF + NestExportGate hard block |
 | 2026-08-05 | Day 6: INestingEngine + blf_fallback router |
 | 2026-08-05 | Day 7: ToolId binding T1/T2/T3 + preflight |
+| 2026-08-05 | Day 8: CamSafety order + per-panel depths |

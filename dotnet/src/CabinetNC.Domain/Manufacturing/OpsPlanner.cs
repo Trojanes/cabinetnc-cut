@@ -30,13 +30,6 @@ public sealed record CutOp
 /// <summary>Port of src/ops.js featuresToOps + attachOpsToNest (contour + drill + groove).</summary>
 public static class OpsPlanner
 {
-    static readonly Dictionary<string, int> Rank = new()
-    {
-        ["contour"] = 0,
-        ["drill"] = 1,
-        ["groove"] = 2,
-    };
-
     public static IReadOnlyList<CutOp> FeaturesToOps(
         IEnumerable<Parts.Panel> panels,
         bool enableContour = true,
@@ -44,7 +37,8 @@ public static class OpsPlanner
         bool enableGroove = true)
     {
         var ops = new List<CutOp>();
-        foreach (var panel in panels)
+        var panelList = panels.ToList();
+        foreach (var panel in panelList)
         {
             var pts = panel.Outline.Points;
             var bounds = Nesting.NestTransform.BoundsOf(panel);
@@ -56,6 +50,8 @@ public static class OpsPlanner
                     PanelId = panel.PanelId,
                     Path = pts.Select(p => (p.X, p.Y)).ToList(),
                     PanelBounds = bounds,
+                    DepthMm = CamSafety.OuterContourDepthMm(panel.ThicknessMm),
+                    Side = panel.Side ?? panel.Orientation?.MillingFace,
                 });
             }
             foreach (var f in panel.Features)
@@ -70,8 +66,9 @@ public static class OpsPlanner
                         X = f.X,
                         Y = f.Y,
                         DiameterMm = f.DiameterMm,
-                        DepthMm = f.DepthMm,
+                        DepthMm = f.DepthMm ?? panel.ThicknessMm,
                         PanelBounds = bounds,
+                        Side = panel.Side ?? panel.Orientation?.MillingFace,
                     });
                 }
                 else if (enableGroove && f.Kind.Contains("groove", StringComparison.OrdinalIgnoreCase)
@@ -85,29 +82,44 @@ public static class OpsPlanner
                         DepthMm = f.DepthMm,
                         Path = path.Select(p => (p.X, p.Y)).ToList(),
                         PanelBounds = bounds,
+                        Side = panel.Side ?? panel.Orientation?.MillingFace,
                     });
                 }
-                else if (enableContour && (f.Kind.Contains("cutout", StringComparison.OrdinalIgnoreCase)
-                         || f.Kind.Contains("pocket", StringComparison.OrdinalIgnoreCase))
+                else if (enableContour && f.Kind.Contains("pocket", StringComparison.OrdinalIgnoreCase)
+                         && f.Path is { Count: >= 3 } pocketPath)
+                {
+                    ops.Add(new CutOp
+                    {
+                        Op = "pocket",
+                        PanelId = panel.PanelId,
+                        FeatureId = f.FeatureId,
+                        DepthMm = f.DepthMm ?? panel.ThicknessMm,
+                        Path = pocketPath.Select(p => (p.X, p.Y)).ToList(),
+                        PanelBounds = bounds,
+                        Side = panel.Side ?? panel.Orientation?.MillingFace,
+                    });
+                }
+                else if (enableContour && f.Kind.Contains("cutout", StringComparison.OrdinalIgnoreCase)
                          && f.Path is { Count: >= 3 } cutPath)
                 {
-                    // throughCutout / pocket → inner contour pass
                     ops.Add(new CutOp
                     {
                         Op = "contour",
                         PanelId = panel.PanelId,
                         FeatureId = f.FeatureId,
-                        DepthMm = f.DepthMm,
+                        DepthMm = f.DepthMm ?? CamSafety.OuterContourDepthMm(panel.ThicknessMm),
                         Path = cutPath.Select(p => (p.X, p.Y)).ToList(),
                         PanelBounds = bounds,
+                        Side = panel.Side ?? panel.Orientation?.MillingFace,
                     });
                 }
             }
         }
 
-        return ToolBinder.BindAll(ops
-            .OrderBy(o => o.PanelId, StringComparer.Ordinal)
-            .ThenBy(o => Rank.GetValueOrDefault(o.Op, 9)));
+        var byId = panelList.ToDictionary(p => p.PanelId, p => p);
+        var bound = ToolBinder.BindAll(ops);
+        var depthApplied = CamSafety.ApplyPanelDepths(bound, byId);
+        return CamSafety.OrderSafe(depthApplied).ToList();
     }
 
     public static IReadOnlyList<CutOp> AttachToNest(IEnumerable<CutOp> ops, IEnumerable<Nesting.NestPlacement> placements)

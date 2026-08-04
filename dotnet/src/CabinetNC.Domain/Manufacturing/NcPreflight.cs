@@ -17,7 +17,8 @@ public static class NcPreflight
         IReadOnlyList<CutOp> ops,
         MachineProfile profile,
         double sheetWidthMm,
-        double sheetLengthMm)
+        double sheetLengthMm,
+        IReadOnlyDictionary<string, Parts.Panel>? panelsById = null)
     {
         var issues = new List<PreflightIssue>();
         var placed = ops.Where(o => o.Placed).ToList();
@@ -55,6 +56,9 @@ public static class NcPreflight
             issues.Add(new("error", "missing_tool_id",
                 $"缺少刀具绑定 ToolId ×{missingTools.Count}: " + string.Join(", ", missingTools.Take(8))));
         }
+
+        if (panelsById is not null)
+            issues.AddRange(CamSafety.DepthIssues(placed, panelsById));
 
         var ok = issues.All(i => i.Level != "error");
         return new PreflightReport { Ok = ok, Issues = issues };

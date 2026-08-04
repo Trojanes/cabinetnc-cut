@@ -5,31 +5,25 @@ using CabinetNC.Domain.Machines;
 /// <summary>Port of src/nc.js opsToNc (G0/G1/F/S — no arcs).</summary>
 public static class NcEmitter
 {
-    static readonly Dictionary<string, int> Rank = new()
-    {
-        ["contour"] = 0,
-        ["drill"] = 1,
-        ["groove"] = 2,
-    };
-
     public static string OpsToNc(IEnumerable<CutOp> ops, MachineProfile profile)
     {
         var safeZ = profile.SafeZMm;
         var rpm = profile.SpindleRpm;
-        var list = ops.Where(o => o.Placed).ToList();
-        if (!profile.EnableContour) list = list.Where(o => o.Op != "contour").ToList();
+        var list = ops.Where(o => o.Placed && o.Enabled).ToList();
+        if (!profile.EnableContour) list = list.Where(o => o.Op is not ("contour" or "pocket")).ToList();
         if (!profile.EnableDrill) list = list.Where(o => o.Op != "drill").ToList();
         if (!profile.EnableGroove) list = list.Where(o => o.Op != "groove").ToList();
 
-        var contours = list.Where(o => o.Op == "contour" && o.Path is { Count: >= 3 }).ToList();
+        var contours = list.Where(o => (o.Op is "contour" or "pocket") && o.Path is { Count: >= 3 }).ToList();
         var drills = list.Where(o => o.Op == "drill" && o.SheetX is not null).ToList();
         var grooves = list.Where(o => o.Op == "groove" && o.Path is { Count: >= 2 }).ToList();
-        var all = SortOps(contours.Concat(drills).Concat(grooves));
+        var all = CamSafety.OrderSafe(contours.Concat(drills).Concat(grooves));
 
         var lines = new List<string>
         {
             $"(cabinetnc-cut nc · {profile.Id} · {profile.Name} · {profile.Dialect})",
             "(wcs: sheet SW origin · X+ right · Y+ back · Z+ up · units mm)",
+            $"(cam safety: drill→pocket→groove→inner→outer · through+{CamSafety.ThroughAllowanceMm})",
         };
         if (!string.IsNullOrWhiteSpace(profile.OriginNote))
             lines.Add($"(origin: {profile.OriginNote.Replace("(", "").Replace(")", "")})");
@@ -45,12 +39,18 @@ public static class NcEmitter
         if (rpm > 0) lines.Add($"S{Math.Round(rpm)} M3");
         lines.Add($"G0 Z{Fmt(safeZ)}");
 
+        string? lastTool = null;
         foreach (var group in all.GroupBy(o => o.SheetIndex).OrderBy(g => g.Key))
         {
             lines.Add($"(sheet {group.Key + 1})");
-            foreach (var item in SortOps(group))
+            foreach (var item in CamSafety.OrderSafe(group))
             {
-                if (item.Op == "contour") EmitContour(lines, item, profile);
+                if (!string.IsNullOrWhiteSpace(item.ToolId) && item.ToolId != lastTool)
+                {
+                    lines.Add($"(tool {item.ToolId})");
+                    lastTool = item.ToolId;
+                }
+                if (item.Op is "contour" or "pocket") EmitContour(lines, item, profile);
                 else if (item.Op == "drill") EmitDrill(lines, item, profile);
                 else if (item.Op == "groove") EmitGroove(lines, item, profile);
             }
@@ -83,7 +83,7 @@ public static class NcEmitter
         var passes = ContourPassDepths(total, profile.ContourStepdownMm);
         var feed = profile.FeedXyMmMin;
         var feedZ = profile.FeedZMmMin;
-        lines.Add($"(contour {c.PanelId}{(passes.Count > 1 ? $" passes={passes.Count}" : "")})");
+        lines.Add($"(contour {c.PanelId} tool={c.ToolId ?? "-"} depth={Fmt(total)}{(passes.Count > 1 ? $" passes={passes.Count}" : "")})");
         lines.Add($"G0 X{Fmt(path[0].X)} Y{Fmt(path[0].Y)}");
         for (var p = 0; p < passes.Count; p++)
         {
@@ -135,9 +135,7 @@ public static class NcEmitter
         lines.Add($"G0 Z{Fmt(safeZ)}");
     }
 
-    static IEnumerable<CutOp> SortOps(IEnumerable<CutOp> items) =>
-        items.OrderBy(o => o.PanelId, StringComparer.Ordinal)
-            .ThenBy(o => Rank.GetValueOrDefault(o.Op, 9));
+    static IEnumerable<CutOp> SortOps(IEnumerable<CutOp> items) => CamSafety.OrderSafe(items);
 
     static string Fmt(double? n) => (Math.Round(n ?? 0, 3)).ToString("0.###");
 }

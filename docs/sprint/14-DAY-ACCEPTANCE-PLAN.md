@@ -333,9 +333,9 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **自动 Gate：**
 
-- [ ] 顺序单测：Outer 索引大于 Drill/Groove/Pocket
-- [ ] 18 mm 板 outer Z 使用 18+allowance，不被 全局 18 误伤 15 mm 板
-- [ ] 非法深度 → 导出失败
+- [x] 顺序单测：Outer 索引大于 Drill/Groove/Pocket
+- [x] 18 mm 板 outer Z 使用 18+allowance，不被 全局 18 误伤 15 mm 板
+- [x] 非法深度 → 导出失败
 
 **监督 Gate：**
 

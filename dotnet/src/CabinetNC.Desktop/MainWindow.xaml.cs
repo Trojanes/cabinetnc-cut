@@ -912,11 +912,13 @@ public partial class MainWindow : Window
     PreflightReport RunPreflight()
     {
         var profile = ActiveProfileForCam();
+        var panels = _session.Package?.Panels.ToDictionary(p => p.PanelId, p => p);
         return NcPreflight.Check(
             _opsOverlay,
             profile,
             ParseMm(StockWidthBox.Text, 1220),
-            ParseMm(StockLengthBox.Text, 2440));
+            ParseMm(StockLengthBox.Text, 2440),
+            panels);
     }
 
     HashSet<string> CurrentConflicts()
@@ -1578,8 +1580,7 @@ public partial class MainWindow : Window
                 try
                 {
                     var profile = ActiveProfileForCam();
-                    var opsForNc = _opsOverlay.Select(o =>
-                        o.Op == "contour" ? o with { DepthMm = profile.ContourDepthMm } : o).ToList();
+                    var opsForNc = _opsOverlay.ToList();
                     var nc = NcEmitter.OpsToNc(opsForNc, profile);
                     NcPreview.Text = nc;
                     ncNote = $" · NC {profile.Id} lines={nc.Split('\n').Length}";
@@ -1695,9 +1696,7 @@ public partial class MainWindow : Window
     {
         if (_opsOverlay.Count == 0 || _nest is not { Ok: true }) return;
         var profile = ActiveProfileForCam();
-        var ops = _opsOverlay.Select(o =>
-            o.Op == "contour" ? o with { DepthMm = profile.ContourDepthMm } : o);
-        NcPreview.Text = NcEmitter.OpsToNc(ops, profile);
+        NcPreview.Text = NcEmitter.OpsToNc(_opsOverlay, profile);
         RefreshWorkflowDots();
         RefreshPreflightMeta();
     }

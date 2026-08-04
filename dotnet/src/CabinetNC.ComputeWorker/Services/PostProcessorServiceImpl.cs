@@ -42,11 +42,7 @@ public sealed class PostProcessorServiceImpl : PostProcessor.PostProcessorBase
             }).ToList();
 
             var profile = MachineCatalog.Get(request.MachineId);
-            var ops = OpsPlanner.AttachToNest(OpsPlanner.FeaturesToOps(panels), placements)
-                .Select(op => op.Op == "contour"
-                    ? op with { DepthMm = profile.ContourDepthMm }
-                    : op)
-                .ToList();
+            var ops = OpsPlanner.AttachToNest(OpsPlanner.FeaturesToOps(panels), placements).ToList();
 
             var nc = NcEmitter.OpsToNc(ops, profile);
             var lines = nc.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
