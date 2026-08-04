@@ -39,6 +39,8 @@ message NestPartMsg {
   double width_mm = 2;
   double height_mm = 3;
   bool may_rotate = 4;
+  string material = 5;
+  double thickness_mm = 6;
 }
 
 message StartNestingRequest {
@@ -94,6 +96,8 @@ message PanelGeomMsg {
   string panel_id = 1;
   repeated Point2Msg outline = 2;
   repeated PanelFeatureMsg features = 3;
+  string material = 4;
+  double thickness_mm = 5;
 }
 
 message GenerateOperationsRequest {

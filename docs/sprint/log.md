@@ -12,3 +12,4 @@
 | 2026-08-05 | Day 10: per-sheet bundle + IPostProcessor |
 | 2026-08-05 | Day 11 PARTIAL: DoubleSideGate no_registration |
 | 2026-08-05 | Day 12: labels HTML + bom.csv + DXF rect import |
+| 2026-08-05 | Day 13: Worker NestEngineRouter + proto mat/thk |

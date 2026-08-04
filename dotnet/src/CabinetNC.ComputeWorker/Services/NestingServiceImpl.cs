@@ -13,35 +13,75 @@ public sealed class NestingServiceImpl : Nesting.NestingBase
     {
         try
         {
-            var parts = request.Parts.Select(p => new NestPart
+            var border = request.BorderMm > 0 ? request.BorderMm : 15;
+            var spacing = request.SpacingMm > 0 ? request.SpacingMm : 12;
+            var sheetW = request.SheetWidthMm > 0 ? request.SheetWidthMm : 1220;
+            var sheetL = request.SheetLengthMm > 0 ? request.SheetLengthMm : 2440;
+
+            // Reconstruct panels so Worker uses the same GroupedBlf path as Desktop (Day 13).
+            var panels = request.Parts.Select(p => new Panel
             {
                 PanelId = p.PanelId,
-                WidthMm = p.WidthMm,
-                HeightMm = p.HeightMm,
-                MayRotate = p.MayRotate,
+                Material = string.IsNullOrWhiteSpace(p.Material) ? null : p.Material,
+                ThicknessMm = p.ThicknessMm > 0 ? p.ThicknessMm : 0,
+                AllowedRotations = p.MayRotate ? null : new[] { 0, 180 },
+                Outline = new Outline
+                {
+                    Points =
+                    [
+                        new(0, 0),
+                        new(p.WidthMm, 0),
+                        new(p.WidthMm, p.HeightMm),
+                        new(0, p.HeightMm),
+                    ],
+                    Closed = true,
+                },
             }).ToList();
 
-            var spacing = request.SpacingMm > 0 ? request.SpacingMm : 12;
-            var result = BlfNester.Pack(new NestRequest
+            var settings = new NestSettings
             {
-                Parts = parts,
-                SheetWidthMm = request.SheetWidthMm > 0 ? request.SheetWidthMm : 1220,
-                SheetLengthMm = request.SheetLengthMm > 0 ? request.SheetLengthMm : 2440,
-                SpacingMm = spacing,
-                BorderMm = request.BorderMm > 0 ? request.BorderMm : 15,
+                MarginMm = border,
+                ClearanceMm = spacing,
                 AllowRotation = request.AllowRotation,
+                GrainLock = true,
+            };
+            var stock = new[]
+            {
+                new NestSheetSpec
+                {
+                    WidthMm = sheetW,
+                    LengthMm = sheetL,
+                    BorderMm = border,
+                    Material = null,
+                    ThicknessMm = 0,
+                    Label = "STOCK",
+                },
+            };
+
+            var (packed, log) = new NestEngineRouter().Run(new NestEngineRequest
+            {
+                Panels = panels,
+                Settings = settings,
+                StockTemplates = stock,
+                SizeOf = GroupedBlfNester.SizeOfOutline,
+                EnginePreference = "blf",
             });
 
-            var collisions = NestValidator.FindAabbCollisions(parts, result.Placements, spacing);
+            var aabbParts = panels.Select(p =>
+            {
+                var (w, h) = GroupedBlfNester.SizeOfOutline(p);
+                return new NestPart { PanelId = p.PanelId, WidthMm = w, HeightMm = h };
+            }).ToList();
+            var collisions = NestValidator.FindAabbCollisions(aabbParts, packed.Placements, spacing);
 
             var reply = new StartNestingReply
             {
                 Ok = true,
-                Engine = result.Engine,
-                SheetCount = result.SheetCount,
+                Engine = packed.Engine,
+                SheetCount = packed.SheetCount,
             };
-            reply.Unplaced.AddRange(result.Unplaced);
-            foreach (var p in result.Placements)
+            reply.Unplaced.AddRange(packed.Unplaced);
+            foreach (var p in packed.Placements)
             {
                 reply.Placements.Add(new NestPlacementMsg
                 {
@@ -50,6 +90,14 @@ public sealed class NestingServiceImpl : Nesting.NestingBase
                     OffsetX = p.OffsetX,
                     OffsetY = p.OffsetY,
                     RotationDeg = p.RotationDeg,
+                });
+            }
+            if (!string.IsNullOrWhiteSpace(log.FallbackReason))
+            {
+                reply.Warnings.Add(new NestWarningMsg
+                {
+                    Code = "engine_fallback",
+                    Message = log.FallbackReason,
                 });
             }
             foreach (var c in collisions)
@@ -83,6 +131,8 @@ public sealed class OperationsServiceImpl : Operations.OperationsBase
             var panels = request.Panels.Select(p => new Panel
             {
                 PanelId = p.PanelId,
+                Material = string.IsNullOrWhiteSpace(p.Material) ? null : p.Material,
+                ThicknessMm = p.ThicknessMm > 0 ? p.ThicknessMm : 18,
                 Outline = new Outline
                 {
                     Points = p.Outline.Select(pt => new Point2(pt.X, pt.Y)).ToList(),
@@ -111,7 +161,7 @@ public sealed class OperationsServiceImpl : Operations.OperationsBase
             var reply = new GenerateOperationsReply
             {
                 Ok = true,
-                ContourCount = ops.Count(o => o.Op == "contour"),
+                ContourCount = ops.Count(o => o.Op is "contour" or "pocket"),
                 DrillCount = ops.Count(o => o.Op == "drill"),
             };
             foreach (var op in ops)
