@@ -271,9 +271,9 @@ docs/sprint/day-NN-report.md
 
 **自动 Gate：**
 
-- [ ] 默认路径仍是 BLF，行为与 Day 5 兼容
-- [ ] 高级引擎抛错/超时 → 自动 BLF 且标记 `engine=blf_fallback`
-- [ ] 接口测试覆盖切换/回退
+- [x] 默认路径仍是 BLF，行为与 Day 5 兼容
+- [x] 高级引擎抛错/超时 → 自动 BLF 且标记 `engine=blf_fallback`
+- [x] 接口测试覆盖切换/回退
 
 **监督 Gate：**
 

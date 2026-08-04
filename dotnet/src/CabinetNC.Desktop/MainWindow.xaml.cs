@@ -1448,11 +1448,16 @@ public partial class MainWindow : Window
             var sheets = BuildNestSheetQueue(border);
             var prevPlaces = _nest?.Placements.ToDictionary(p => p.PanelId, p => p);
 
-            var packed = GroupedBlfNester.Pack(
-                _session.Package.Panels,
-                settings,
-                sheets,
-                SizeOf);
+            var packedPair = new NestEngineRouter().Run(new NestEngineRequest
+            {
+                Panels = _session.Package.Panels,
+                Settings = settings,
+                StockTemplates = sheets,
+                SizeOf = SizeOf,
+                EnginePreference = "preferred",
+            });
+            var packed = packedPair.Result;
+            var engineLog = packedPair.Log;
 
             _nest = new StartNestingReply
             {
@@ -1460,6 +1465,22 @@ public partial class MainWindow : Window
                 Engine = packed.Engine,
                 SheetCount = packed.SheetCount,
             };
+            if (!string.IsNullOrWhiteSpace(engineLog.FallbackReason))
+            {
+                _nest.Warnings.Add(new NestWarningMsg
+                {
+                    Code = "engine_fallback",
+                    Message = $"{engineLog.AttemptedEngine} → {engineLog.SelectedEngine}: {engineLog.FallbackReason} ({engineLog.ElapsedMs}ms)",
+                });
+            }
+            else
+            {
+                _nest.Warnings.Add(new NestWarningMsg
+                {
+                    Code = "engine",
+                    Message = $"{engineLog.SelectedEngine} · {engineLog.ElapsedMs}ms · util~{engineLog.UtilizationHintPct:0.0}%",
+                });
+            }
             _nest.Unplaced.AddRange(packed.Unplaced);
             foreach (var p in packed.Placements)
             {

@@ -5,3 +5,4 @@
 | 2026-08-05 | Day 3 complete: Inspector + 3-class undo tests |
 | 2026-08-05 | Day 4: mirror/clipboard/context menu/small warn |
 | 2026-08-05 | Day 5: grouped BLF + NestExportGate hard block |
+| 2026-08-05 | Day 6: INestingEngine + blf_fallback router |
