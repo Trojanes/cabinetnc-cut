@@ -362,9 +362,9 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **自动 Gate：**
 
-- [ ] Pocket 刀路点数显著多于“单圈轮廓”（阈值断言）
-- [ ] stepover 参数影响路径
-- [ ] 小板触发警告用例通过
+- [x] Pocket 刀路点数显著多于“单圈轮廓”（阈值断言）
+- [x] stepover 参数影响路径
+- [x] 小板触发警告用例通过
 
 **监督 Gate：**
 
@@ -373,8 +373,8 @@ Drill → Pocket → Groove → Inner Contour → Outer Profile
 
 **待拍板：**
 
-- Onion Skin 默认留皮宽度
-- 小板人工覆盖方式
+- Onion Skin 默认留皮宽度 — ASSUMED 0.5 mm
+- 小板人工覆盖方式 — ASSUMED warn only (not hard error)
 
 ---
 

@@ -58,7 +58,17 @@ public static class NcPreflight
         }
 
         if (panelsById is not null)
+        {
             issues.AddRange(CamSafety.DepthIssues(placed, panelsById));
+            foreach (var panel in panelsById.Values)
+            {
+                if (Parts.PanelEdit.IsSmallPanel(panel, out var reason))
+                {
+                    issues.Add(new("warn", "small_panel",
+                        $"{panel.PanelId}: 小板策略 — {reason}"));
+                }
+            }
+        }
 
         var ok = issues.All(i => i.Level != "error");
         return new PreflightReport { Ok = ok, Issues = issues };

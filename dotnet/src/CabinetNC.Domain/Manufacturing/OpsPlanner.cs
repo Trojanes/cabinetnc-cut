@@ -88,15 +88,23 @@ public static class OpsPlanner
                 else if (enableContour && f.Kind.Contains("pocket", StringComparison.OrdinalIgnoreCase)
                          && f.Path is { Count: >= 3 } pocketPath)
                 {
+                    var outline = pocketPath.Select(p => (p.X, p.Y)).ToList();
+                    var tool = ToolCatalog.DefaultPresets.First(t => t.ToolId == "T1");
+                    var cleared = PocketClearer.Clear(new PocketClearer.PocketClearRequest
+                    {
+                        Outline = outline,
+                        ToolDiameterMm = tool.DiameterMm,
+                    });
                     ops.Add(new CutOp
                     {
                         Op = "pocket",
                         PanelId = panel.PanelId,
                         FeatureId = f.FeatureId,
                         DepthMm = f.DepthMm ?? panel.ThicknessMm,
-                        Path = pocketPath.Select(p => (p.X, p.Y)).ToList(),
+                        Path = cleared.Path,
                         PanelBounds = bounds,
                         Side = panel.Side ?? panel.Orientation?.MillingFace,
+                        StepdownMm = tool.DiameterMm * 0.5,
                     });
                 }
                 else if (enableContour && f.Kind.Contains("cutout", StringComparison.OrdinalIgnoreCase)
