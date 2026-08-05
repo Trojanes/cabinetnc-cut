@@ -131,8 +131,18 @@ public static class NcEmitter
     /// </summary>
     static void EmitPocket(List<string> lines, CutOp c, MachineProfile profile, double feed, double feedZ)
     {
+        if (c.DepthMm is null or <= 0)
+        {
+            lines.Add($"(pocket {c.PanelId} BLOCKED missing DepthMm)");
+            return;
+        }
+        if (c.PocketTooSmallForTool)
+        {
+            lines.Add($"(pocket {c.PanelId} BLOCKED too small for tool)");
+            return;
+        }
         var safeZ = profile.SafeZMm;
-        var total = Math.Abs(c.DepthMm ?? profile.ContourDepthMm);
+        var total = Math.Abs(c.DepthMm.Value);
         var stepdown = c.StepdownMm is double sd && sd > 0 ? sd : profile.ContourStepdownMm;
         var passes = ContourPassDepths(total, stepdown);
         var segments = c.PathSegments;

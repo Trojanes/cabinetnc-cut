@@ -1970,6 +1970,21 @@ public partial class MainWindow : Window
         var report = RunPreflight();
         RefreshPreflightMeta();
         if (report.Ok) return true;
+
+        // Hard CAM safety errors cannot be overridden (pocket/tool gates).
+        var hard = report.Issues.Where(i => i.Level == "error" && i.Code is
+            "pocket_depth_missing" or "pocket_too_small_for_tool" or "missing_tool_id"
+            or "groove_too_deep" or "depth_spoilboard" or "no_registration").ToList();
+        if (hard.Count > 0)
+        {
+            MessageBox.Show(this,
+                "预检硬错误，禁止导出：\n\n" + NcPreflight.Format(new PreflightReport { Ok = false, Issues = hard }),
+                "预检未通过",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return false;
+        }
+
         var r = MessageBox.Show(this,
             NcPreflight.Format(report) + "\n\n仍要继续导出吗？",
             "预检未通过",

@@ -58,6 +58,8 @@ public static class NcPreflight
                 $"缺少刀具绑定 ToolId ×{missingTools.Count}: " + string.Join(", ", missingTools.Take(8))));
         }
 
+        issues.AddRange(PocketSafetyIssues(placed));
+
         if (panelsById is not null)
         {
             issues.AddRange(CamSafety.DepthIssues(placed, panelsById));
@@ -82,6 +84,28 @@ public static class NcPreflight
     {
         if (report.Issues.Count == 0) return "预检通过";
         return string.Join("\n", report.Issues.Select(i => (i.Level == "error" ? "✗ " : "! ") + i.Message));
+    }
+
+    /// <summary>Pocket must have explicit depth and a tool-fit clear path — never silent skip.</summary>
+    public static IReadOnlyList<PreflightIssue> PocketSafetyIssues(IEnumerable<CutOp> ops)
+    {
+        var issues = new List<PreflightIssue>();
+        foreach (var op in ops.Where(o => o.Placed && o.Enabled && o.Op == "pocket"))
+        {
+            if (op.DepthMm is null or <= 0)
+            {
+                issues.Add(new("error", "pocket_depth_missing",
+                    $"pocket/{op.PanelId}/{op.FeatureId ?? "-"}: 缺少明确 DepthMm，禁止默认切穿板厚"));
+            }
+            if (op.PocketTooSmallForTool
+                || (op.PathSegments is null or { Count: 0 }
+                    && op.FinishLoop is null or { Count: < 3 }))
+            {
+                issues.Add(new("error", "pocket_too_small_for_tool",
+                    $"pocket/{op.PanelId}/{op.FeatureId ?? "-"}: 型腔过小，刀具无法加工（禁止静默跳过）"));
+            }
+        }
+        return issues;
     }
 
     static IEnumerable<(double X, double Y)> PointsOf(CutOp op)

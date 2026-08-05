@@ -30,6 +30,8 @@ public static class PocketClearer
         public int PassCount { get; init; }
         public double StepoverMm { get; init; }
         public double InsetMm { get; init; }
+        /// <summary>True when inset region cannot fit the tool (no silent skip).</summary>
+        public bool TooSmallForTool { get; init; }
     }
 
     public static PocketClearResult Clear(PocketClearRequest req)
@@ -50,15 +52,17 @@ public static class PocketClearer
             EndType.Polygon);
         if (insetPaths.Count == 0 || insetPaths[0].Count < 3)
         {
-            // Too small for tool+onion — fall back to center point only (still not a fake loop claim)
+            // Too small for tool+onion — mark explicit failure (do not invent a machining path)
             var cx = req.Outline.Average(p => p.X);
             var cy = req.Outline.Average(p => p.Y);
             return new PocketClearResult
             {
                 Path = [(cx, cy)],
+                Segments = [],
                 PassCount = 0,
                 StepoverMm = step,
                 InsetMm = inset,
+                TooSmallForTool = true,
             };
         }
 

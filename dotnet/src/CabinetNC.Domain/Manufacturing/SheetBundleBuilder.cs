@@ -97,9 +97,23 @@ public static class SheetBundleBuilder
         IReadOnlyList<CutOp> ops,
         MachineProfile profile,
         IPostProcessor? post = null,
-        string? jobSheetHtml = null)
+        string? jobSheetHtml = null,
+        IReadOnlyDictionary<string, Parts.Panel>? panelsById = null,
+        double sheetWidthMm = 0,
+        double sheetLengthMm = 0,
+        FaceRegistration? registration = null,
+        bool enforcePreflight = true)
     {
         post ??= PostProcessorCatalog.Resolve(profile);
+        if (enforcePreflight)
+        {
+            var panels = panelsById
+                ?? package.Panels.ToDictionary(p => p.PanelId, StringComparer.Ordinal);
+            var report = NcPreflight.Check(ops, profile, sheetWidthMm, sheetLengthMm, panels, registration);
+            if (!report.Ok)
+                throw new InvalidOperationException("Export blocked by preflight:\n" + NcPreflight.Format(report));
+        }
+
         var jobId = package.JobId ?? "job";
         var sheetIndexes = placements.Select(p => p.SheetIndex).Distinct().OrderBy(i => i).ToList();
         if (sheetIndexes.Count == 0 && ops.Any(o => o.Placed))

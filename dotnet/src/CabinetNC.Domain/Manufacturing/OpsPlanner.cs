@@ -24,6 +24,8 @@ public sealed record CutOp
     public IReadOnlyList<(double X, double Y)>? FinishLoop { get; init; }
     /// <summary>When true (contours), emitter closes to first point; pockets use false.</summary>
     public bool ClosePath { get; init; } = true;
+    /// <summary>Pocket inset cleared empty — tool cannot fit (must fail preflight).</summary>
+    public bool PocketTooSmallForTool { get; init; }
     public Nesting.LocalBounds? PanelBounds { get; init; }
     /// <summary>Bound tool — required for export (Day 7).</summary>
     public string? ToolId { get; init; }
@@ -106,11 +108,13 @@ public static class OpsPlanner
                         Op = "pocket",
                         PanelId = panel.PanelId,
                         FeatureId = f.FeatureId,
-                        DepthMm = f.DepthMm ?? panel.ThicknessMm,
+                        // Do NOT default to panel thickness — missing depth is a preflight error.
+                        DepthMm = f.DepthMm,
                         Path = cleared.Path,
                         PathSegments = cleared.Segments,
                         FinishLoop = cleared.FinishLoop,
                         ClosePath = false,
+                        PocketTooSmallForTool = cleared.TooSmallForTool,
                         PanelBounds = bounds,
                         Side = panel.Side ?? panel.Orientation?.MillingFace,
                         StepdownMm = tool.DiameterMm * 0.5,
