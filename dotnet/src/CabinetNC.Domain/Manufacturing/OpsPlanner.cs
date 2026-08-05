@@ -18,6 +18,12 @@ public sealed record CutOp
     public double? DepthMm { get; init; }
     public double? StepdownMm { get; init; }
     public IReadOnlyList<(double X, double Y)>? Path { get; init; }
+    /// <summary>Disjoint path segments for pocket clear (scan strokes). Prefer over flat Path.</summary>
+    public IReadOnlyList<IReadOnlyList<(double X, double Y)>>? PathSegments { get; init; }
+    /// <summary>Optional closed finish loop for pocket onion-skin boundary.</summary>
+    public IReadOnlyList<(double X, double Y)>? FinishLoop { get; init; }
+    /// <summary>When true (contours), emitter closes to first point; pockets use false.</summary>
+    public bool ClosePath { get; init; } = true;
     public Nesting.LocalBounds? PanelBounds { get; init; }
     /// <summary>Bound tool — required for export (Day 7).</summary>
     public string? ToolId { get; init; }
@@ -102,6 +108,9 @@ public static class OpsPlanner
                         FeatureId = f.FeatureId,
                         DepthMm = f.DepthMm ?? panel.ThicknessMm,
                         Path = cleared.Path,
+                        PathSegments = cleared.Segments,
+                        FinishLoop = cleared.FinishLoop,
+                        ClosePath = false,
                         PanelBounds = bounds,
                         Side = panel.Side ?? panel.Orientation?.MillingFace,
                         StepdownMm = tool.DiameterMm * 0.5,
@@ -152,6 +161,8 @@ public static class OpsPlanner
                     : default);
             double? sheetX = null, sheetY = null;
             IReadOnlyList<(double X, double Y)>? path = op.Path;
+            IReadOnlyList<IReadOnlyList<(double X, double Y)>>? pathSegments = op.PathSegments;
+            IReadOnlyList<(double X, double Y)>? finishLoop = op.FinishLoop;
             if (op.Op == "drill" && op.X is double x && op.Y is double y)
             {
                 var (sx, sy) = Nesting.NestTransform.ToSheet(
@@ -159,14 +170,21 @@ public static class OpsPlanner
                 sheetX = Math.Round(sx, 3);
                 sheetY = Math.Round(sy, 3);
             }
-            else if (op.Path is { Count: > 0 })
+            else if (op.Path is { Count: > 0 } || op.PathSegments is { Count: > 0 })
             {
-                path = op.Path.Select(p =>
+                (double X, double Y) Map((double X, double Y) p)
                 {
                     var (sx, sy) = Nesting.NestTransform.ToSheet(
                         p.X, p.Y, bounds, place.OffsetX, place.OffsetY, place.RotationDeg);
                     return (Math.Round(sx, 3), Math.Round(sy, 3));
-                }).ToList();
+                }
+
+                if (op.Path is { Count: > 0 })
+                    path = op.Path.Select(Map).ToList();
+                if (op.PathSegments is { Count: > 0 })
+                    pathSegments = op.PathSegments.Select(seg => (IReadOnlyList<(double X, double Y)>)seg.Select(Map).ToList()).ToList();
+                if (op.FinishLoop is { Count: > 0 })
+                    finishLoop = op.FinishLoop.Select(Map).ToList();
             }
 
             return op with
@@ -179,6 +197,8 @@ public static class OpsPlanner
                 SheetX = sheetX,
                 SheetY = sheetY,
                 Path = path,
+                PathSegments = pathSegments,
+                FinishLoop = finishLoop,
             };
         }).ToList();
     }

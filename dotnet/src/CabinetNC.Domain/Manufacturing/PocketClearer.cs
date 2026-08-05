@@ -5,6 +5,7 @@ using Clipper2Lib;
 /// <summary>
 /// Pocket area clear v1 — Clipper inset + zigzag fill (not boundary-only).
 /// ASSUMPTION: stepover = 40% tool Ø; finish/onion allowance = 0.5 mm on walls.
+/// Scan strokes are disjoint segments; finish inset is a separate closed loop.
 /// </summary>
 public static class PocketClearer
 {
@@ -23,6 +24,9 @@ public static class PocketClearer
     public sealed class PocketClearResult
     {
         public required IReadOnlyList<(double X, double Y)> Path { get; init; }
+        /// <summary>Disjoint motion segments (each scan stroke).</summary>
+        public IReadOnlyList<IReadOnlyList<(double X, double Y)>> Segments { get; init; } = [];
+        public IReadOnlyList<(double X, double Y)>? FinishLoop { get; init; }
         public int PassCount { get; init; }
         public double StepoverMm { get; init; }
         public double InsetMm { get; init; }
@@ -64,7 +68,8 @@ public static class PocketClearer
         var minY = region.Min(p => p.Y) / Scale;
         var maxY = region.Max(p => p.Y) / Scale;
 
-        var zigzag = new List<(double X, double Y)>();
+        var segments = new List<IReadOnlyList<(double X, double Y)>>();
+        var flat = new List<(double X, double Y)>();
         var pass = 0;
         var leftToRight = true;
         for (var y = minY; y <= maxY + 1e-9; y += step)
@@ -92,29 +97,41 @@ public static class PocketClearer
             if (!leftToRight) segs.Reverse();
             foreach (var (x0, x1) in segs)
             {
+                (double X, double Y) a, b;
                 if (leftToRight)
                 {
-                    zigzag.Add((x0, y));
-                    zigzag.Add((x1, y));
+                    a = (x0, y);
+                    b = (x1, y);
                 }
                 else
                 {
-                    zigzag.Add((x1, y));
-                    zigzag.Add((x0, y));
+                    a = (x1, y);
+                    b = (x0, y);
                 }
+                segments.Add([a, b]);
+                flat.Add(a);
+                flat.Add(b);
             }
             leftToRight = !leftToRight;
         }
 
-        // Finish: one boundary pass on inset (onion skin leave stock on outer wall)
-        foreach (var p in region)
-            zigzag.Add((p.X / Scale, p.Y / Scale));
-        if (region.Count > 0)
-            zigzag.Add((region[0].X / Scale, region[0].Y / Scale));
+        // Finish: one boundary pass on inset (onion skin leave stock on outer wall) — separate loop
+        IReadOnlyList<(double X, double Y)>? finish = null;
+        if (region.Count >= 3)
+        {
+            var loop = new List<(double X, double Y)>(region.Count + 1);
+            foreach (var p in region)
+                loop.Add((p.X / Scale, p.Y / Scale));
+            loop.Add((region[0].X / Scale, region[0].Y / Scale));
+            finish = loop;
+            flat.AddRange(loop);
+        }
 
         return new PocketClearResult
         {
-            Path = zigzag,
+            Path = flat,
+            Segments = segments,
+            FinishLoop = finish,
             PassCount = pass,
             StepoverMm = step,
             InsetMm = inset,

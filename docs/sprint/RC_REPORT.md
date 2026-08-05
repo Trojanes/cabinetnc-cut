@@ -13,7 +13,7 @@
 | Clipper/AABB export hard gate | Done (auto) | `NestExportGate` |
 | Per-op ToolId | Done (auto) | `ToolBinderTests` |
 | Safe order + depth by thickness | Done (auto) | `CamSafetyTests` + order/depth audit tests (no silent groove clamp) |
-| Pocket area clear v1 | Done (auto) | `PocketClearerTests` (not boundary-only) |
+| Pocket area clear v1 | Done (auto) | `PocketClearerTests` + `PocketNcSegmentAuditTests` (disjoint segments; no cross-seg G1 / false close) |
 | Per-sheet NC/DXF/manifest | Done (auto) | `SheetBundleBuilderTests` |
 | Preflight blocks bad export | Done (auto) | dirty/nest/tool/depth/registration gates |
 | A/B requires registration | **Partial** | Gate blocks B; no production flip NC |

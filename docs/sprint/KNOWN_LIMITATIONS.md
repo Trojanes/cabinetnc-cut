@@ -22,6 +22,7 @@ Honest limits — do **not** treat these as done.
 ## Pocket
 
 - Zigzag + Clipper inset clear v1. Not trochoidal; corner residual may remain after finish inset pass.
+- Scan strokes are **disjoint segments**; `NcEmitter` rapid (G0) between segments and emits finish loop separately — not one continuous contour closed to path[0].
 
 ## Import / CAD
 
@@ -32,6 +33,7 @@ Honest limits — do **not** treat these as done.
 
 - Per-sheet single NC with `(tool Tn)` comments. **Not** split-by-tool files.
 - Tool IDs ASSUMED T1/T2/T3 presets — shop must confirm magazine numbers.
+- **Open audit:** ToolCatalog per-tool Feed/RPM may not yet drive real `S`/`F` on tool change (still machine-profile global) — Fix 4 pending.
 
 ## UIA
 

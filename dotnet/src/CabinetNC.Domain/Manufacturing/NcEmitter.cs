@@ -14,10 +14,13 @@ public static class NcEmitter
         if (!profile.EnableDrill) list = list.Where(o => o.Op != "drill").ToList();
         if (!profile.EnableGroove) list = list.Where(o => o.Op != "groove").ToList();
 
-        var contours = list.Where(o => (o.Op is "contour" or "pocket") && o.Path is { Count: >= 3 }).ToList();
+        var contours = list.Where(o => o.Op == "contour" && o.Path is { Count: >= 3 }).ToList();
+        var pockets = list.Where(o => o.Op == "pocket" && (
+            (o.PathSegments is { Count: > 0 }) ||
+            (o.Path is { Count: >= 2 }))).ToList();
         var drills = list.Where(o => o.Op == "drill" && o.SheetX is not null).ToList();
         var grooves = list.Where(o => o.Op == "groove" && o.Path is { Count: >= 2 }).ToList();
-        var all = CamSafety.OrderSafe(contours.Concat(drills).Concat(grooves));
+        var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves));
 
         var lines = new List<string>
         {
@@ -50,7 +53,8 @@ public static class NcEmitter
                     lines.Add($"(tool {item.ToolId})");
                     lastTool = item.ToolId;
                 }
-                if (item.Op is "contour" or "pocket") EmitContour(lines, item, profile);
+                if (item.Op == "contour") EmitContour(lines, item, profile);
+                else if (item.Op == "pocket") EmitPocket(lines, item, profile);
                 else if (item.Op == "drill") EmitDrill(lines, item, profile);
                 else if (item.Op == "groove") EmitGroove(lines, item, profile);
             }
@@ -92,10 +96,87 @@ public static class NcEmitter
             lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
             for (var i = 1; i < path.Count; i++)
                 lines.Add($"G1 X{Fmt(path[i].X)} Y{Fmt(path[i].Y)} F{feed}");
-            lines.Add($"G1 X{Fmt(path[0].X)} Y{Fmt(path[0].Y)} F{feed}");
+            if (c.ClosePath)
+                lines.Add($"G1 X{Fmt(path[0].X)} Y{Fmt(path[0].Y)} F{feed}");
             if (p < passes.Count - 1) lines.Add($"G0 Z{Fmt(safeZ)}");
         }
         lines.Add($"G0 Z{Fmt(safeZ)}");
+    }
+
+    /// <summary>
+    /// Pocket: each scan segment is plunge→cut; G0 between segments (no cross-area G1).
+    /// Finish loop is a separate closed contour; zigzag is never closed back to path[0].
+    /// </summary>
+    static void EmitPocket(List<string> lines, CutOp c, MachineProfile profile)
+    {
+        var safeZ = profile.SafeZMm;
+        var total = Math.Abs(c.DepthMm ?? profile.ContourDepthMm);
+        var stepdown = c.StepdownMm is double sd && sd > 0 ? sd : profile.ContourStepdownMm;
+        var passes = ContourPassDepths(total, stepdown);
+        var feed = profile.FeedXyMmMin;
+        var feedZ = profile.FeedZMmMin;
+        var segments = c.PathSegments;
+        if (segments is null || segments.Count == 0)
+        {
+            // Legacy flat path fallback — still avoid contour-style close
+            if (c.Path is not { Count: >= 2 }) return;
+            lines.Add($"(pocket {c.PanelId} tool={c.ToolId ?? "-"} depth={Fmt(total)} legacy-flat)");
+            EmitOpenPolylinePasses(lines, c.Path, passes, safeZ, feed, feedZ);
+            lines.Add($"G0 Z{Fmt(safeZ)}");
+            return;
+        }
+
+        lines.Add($"(pocket {c.PanelId} tool={c.ToolId ?? "-"} depth={Fmt(total)} segments={segments.Count}{(passes.Count > 1 ? $" passes={passes.Count}" : "")})");
+        for (var p = 0; p < passes.Count; p++)
+        {
+            var z = -passes[p];
+            if (passes.Count > 1) lines.Add($"(pass {p + 1}/{passes.Count} Z{Fmt(z)})");
+            for (var s = 0; s < segments.Count; s++)
+            {
+                var seg = segments[s];
+                if (seg.Count < 2) continue;
+                lines.Add($"G0 Z{Fmt(safeZ)}");
+                lines.Add($"G0 X{Fmt(seg[0].X)} Y{Fmt(seg[0].Y)}");
+                lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
+                for (var i = 1; i < seg.Count; i++)
+                    lines.Add($"G1 X{Fmt(seg[i].X)} Y{Fmt(seg[i].Y)} F{feed}");
+            }
+
+            if (c.FinishLoop is { Count: >= 3 } finish)
+            {
+                lines.Add("(finish)");
+                lines.Add($"G0 Z{Fmt(safeZ)}");
+                lines.Add($"G0 X{Fmt(finish[0].X)} Y{Fmt(finish[0].Y)}");
+                lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
+                for (var i = 1; i < finish.Count; i++)
+                    lines.Add($"G1 X{Fmt(finish[i].X)} Y{Fmt(finish[i].Y)} F{feed}");
+                var last = finish[^1];
+                var first = finish[0];
+                if (Math.Abs(last.X - first.X) > 1e-6 || Math.Abs(last.Y - first.Y) > 1e-6)
+                    lines.Add($"G1 X{Fmt(first.X)} Y{Fmt(first.Y)} F{feed}");
+            }
+        }
+        lines.Add($"G0 Z{Fmt(safeZ)}");
+    }
+
+    static void EmitOpenPolylinePasses(
+        List<string> lines,
+        IReadOnlyList<(double X, double Y)> path,
+        IReadOnlyList<double> passes,
+        double safeZ,
+        double feed,
+        double feedZ)
+    {
+        lines.Add($"G0 X{Fmt(path[0].X)} Y{Fmt(path[0].Y)}");
+        for (var p = 0; p < passes.Count; p++)
+        {
+            var z = -passes[p];
+            if (passes.Count > 1) lines.Add($"(pass {p + 1}/{passes.Count} Z{Fmt(z)})");
+            lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
+            for (var i = 1; i < path.Count; i++)
+                lines.Add($"G1 X{Fmt(path[i].X)} Y{Fmt(path[i].Y)} F{feed}");
+            if (p < passes.Count - 1) lines.Add($"G0 Z{Fmt(safeZ)}");
+        }
     }
 
     static void EmitDrill(List<string> lines, CutOp d, MachineProfile profile)
