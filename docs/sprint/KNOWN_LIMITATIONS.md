@@ -1,4 +1,4 @@
-# Known limitations (RC)
+# Known limitations (RC) — audit2
 
 Honest limits — do **not** treat these as done.
 
@@ -6,6 +6,14 @@ Honest limits — do **not** treat these as done.
 
 - `CamSafety.OrderSafe` sorts **SequenceRank before PanelId** (sheet → rank → panel → tool → feature). All drills/grooves on a sheet complete before any outer contour, even across panels.
 - Over-deep grooves are **not** clamped in `ApplyPanelDepths`; `NcPreflight` / `DepthIssues` must still see the illegal depth (`groove_too_deep`).
+
+## Pocket (audited)
+
+- Zigzag + Clipper inset clear v1. Not trochoidal; corner residual may remain after finish inset pass.
+- Scan strokes are **disjoint segments**; `NcEmitter` rapid (G0) between segments and emits finish loop separately.
+- Missing `DepthMm` → `pocket_depth_missing` (error). Does **not** default to full panel thickness.
+- Cavity too small for tool+onion → `pocket_too_small_for_tool` (error). Not a silent skip.
+- Hard pocket/tool/depth errors block Desktop override and `SheetBundleBuilder.Build` when `enforcePreflight` is on.
 
 ## Dual-face CAM (Day 11 PARTIAL)
 
@@ -19,11 +27,6 @@ Honest limits — do **not** treat these as done.
 - Part-in-part model exists but is **disabled**.
 - Desktop nests via Domain locally; Worker uses the same Domain router when called (not every Desktop nest RPC-roundtrips).
 
-## Pocket
-
-- Zigzag + Clipper inset clear v1. Not trochoidal; corner residual may remain after finish inset pass.
-- Scan strokes are **disjoint segments**; `NcEmitter` rapid (G0) between segments and emits finish loop separately — not one continuous contour closed to path[0].
-
 ## Import / CAD
 
 - DXF importer: rectangles / LWPOLYLINE points. **No** full arc tessellation / CAD editor.
@@ -31,13 +34,16 @@ Honest limits — do **not** treat these as done.
 
 ## Post / tools
 
-- Per-sheet single NC with `(tool Tn)` comments **and** real `S`/`F` from `ToolCatalog` on tool change (machine profile is fallback only). **Not** split-by-tool files.
+- **Output policy:** one NC file per **Sheet × Tool** (`{job}_S{n}_{Tn}.nc`). Manifest lists programs. DXF remains per sheet.
+- Each single-tool NC header includes ToolId, DiameterMm, FeedXY, FeedZ, RPM, origin note.
+- Real `S`/`F` come from `ToolCatalog` (machine profile is fallback only).
+- **No** automatic `M6` — `IToolChangePost` reserved; default `NullToolChangePost` returns null until shop confirms controller syntax.
 - Tool IDs ASSUMED T1/T2/T3 presets — shop must confirm magazine numbers.
-- No automatic `M6` tool-change macro — shop post may need to wrap magazine moves.
 
-## UIA
+## UIA / smoke
 
-- Automated UIA smoke can hang in non-interactive agent shells; manual Desktop smoke still required.
+- Automated UIA smoke can hang in non-interactive agent shells; **do not mark UIA PASS**.
+- Manual path: `docs/sprint/MANUAL_SMOKE_10MIN.md` — items start as `MANUAL PENDING`.
 
 ## Not in RC (Campaign 2+)
 
@@ -45,3 +51,4 @@ Honest limits — do **not** treat these as done.
 - Material-removal solid simulation
 - Signed MSI / learning patterns
 - Encrypted woodjob
+- Machine-specific ATC/M6 macros
