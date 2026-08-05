@@ -27,8 +27,8 @@ public static class CamSafety
 
     public static IOrderedEnumerable<CutOp> OrderSafe(IEnumerable<CutOp> ops) =>
         ops.OrderBy(o => o.SheetIndex)
-            .ThenBy(o => o.PanelId, StringComparer.Ordinal)
             .ThenBy(SequenceRank)
+            .ThenBy(o => o.PanelId, StringComparer.Ordinal)
             .ThenBy(o => o.ToolId ?? "", StringComparer.Ordinal)
             .ThenBy(o => o.FeatureId ?? "", StringComparer.Ordinal);
 
