@@ -12,6 +12,22 @@ public interface IPostProcessor
     string Emit(IEnumerable<CutOp> ops, MachineProfile profile);
 }
 
+/// <summary>
+/// Future machine-specific ATC/M6 post. RC default returns null — do not invent M6.
+/// </summary>
+public interface IToolChangePost
+{
+    string Id { get; }
+    string? EmitToolChange(ToolDefinition tool, MachineProfile profile);
+}
+
+/// <summary>Conservative RC stub until shop confirms controller M6 syntax.</summary>
+public sealed class NullToolChangePost : IToolChangePost
+{
+    public string Id => "none";
+    public string? EmitToolChange(ToolDefinition tool, MachineProfile profile) => null;
+}
+
 public sealed class GenericMmPostProcessor : IPostProcessor
 {
     public string Id => "generic_mm";
@@ -61,17 +77,29 @@ public static class PostProcessorCatalog
             : new GenericMmPostProcessor();
 }
 
+public sealed class ToolNcProgram
+{
+    public required string ToolId { get; init; }
+    public required string NcFileName { get; init; }
+    public required string NcText { get; init; }
+    public int OpCount { get; init; }
+}
+
 public sealed class SheetArtifact
 {
     public required int SheetIndex { get; init; }
-    public required string NcFileName { get; init; }
     public required string DxfFileName { get; init; }
-    public required string NcText { get; init; }
     public required string DxfText { get; init; }
     public required string ManifestJson { get; init; }
+    public required IReadOnlyList<ToolNcProgram> ToolPrograms { get; init; }
     public int OpCount { get; init; }
     public IReadOnlyList<string> PanelIds { get; init; } = [];
     public IReadOnlyList<string> ToolIds { get; init; } = [];
+
+    /// <summary>Compatibility: first tool program file name.</summary>
+    public string NcFileName => ToolPrograms.Count > 0 ? ToolPrograms[0].NcFileName : "";
+    /// <summary>Compatibility: first tool program body.</summary>
+    public string NcText => ToolPrograms.Count > 0 ? ToolPrograms[0].NcText : "";
 }
 
 public sealed class ExportBundle
@@ -86,7 +114,7 @@ public sealed class ExportBundle
     public IReadOnlyList<WorkpieceLabel> Labels { get; init; } = [];
 }
 
-/// <summary>Per-sheet NC/DXF/manifest bundle (Day 10).</summary>
+/// <summary>Per-sheet DXF/manifest + per Sheet×Tool NC programs (audited RC).</summary>
 public static class SheetBundleBuilder
 {
     static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
@@ -102,9 +130,14 @@ public static class SheetBundleBuilder
         double sheetWidthMm = 0,
         double sheetLengthMm = 0,
         FaceRegistration? registration = null,
-        bool enforcePreflight = true)
+        bool enforcePreflight = true,
+        IToolChangePost? toolChangePost = null,
+        IReadOnlyDictionary<string, ToolDefinition>? tools = null)
     {
         post ??= PostProcessorCatalog.Resolve(profile);
+        toolChangePost ??= new NullToolChangePost();
+        var catalog = tools ?? ToolCatalog.DefaultMap();
+
         if (enforcePreflight)
         {
             var panels = panelsById
@@ -114,46 +147,70 @@ public static class SheetBundleBuilder
                 throw new InvalidOperationException("Export blocked by preflight:\n" + NcPreflight.Format(report));
         }
 
+        var placed = ops.Where(o => o.Placed && o.Enabled).ToList();
+        if (placed.Any(o => string.IsNullOrWhiteSpace(o.ToolId)))
+            throw new InvalidOperationException("Export blocked: unbound ToolId — refuse mixed or anonymous tool programs.");
+
         var jobId = package.JobId ?? "job";
         var sheetIndexes = placements.Select(p => p.SheetIndex).Distinct().OrderBy(i => i).ToList();
-        if (sheetIndexes.Count == 0 && ops.Any(o => o.Placed))
-            sheetIndexes = ops.Where(o => o.Placed).Select(o => o.SheetIndex).Distinct().OrderBy(i => i).ToList();
+        if (sheetIndexes.Count == 0 && placed.Count > 0)
+            sheetIndexes = placed.Select(o => o.SheetIndex).Distinct().OrderBy(i => i).ToList();
 
         var sheets = new List<SheetArtifact>();
         foreach (var si in sheetIndexes)
         {
-            var sheetOps = ops.Where(o => o.Placed && o.SheetIndex == si).ToList();
+            var sheetOps = placed.Where(o => o.SheetIndex == si).ToList();
             var sheetPlaces = placements.Where(p => p.SheetIndex == si).ToList();
-            var nc = post.Emit(sheetOps, profile);
             var dxf = NestDxfWriter.Write(package, placements, si);
             var panelIds = sheetPlaces.Select(p => p.PanelId).Distinct().OrderBy(x => x).ToList();
-            var toolIds = sheetOps.Select(o => o.ToolId ?? "?").Distinct().OrderBy(x => x).ToList();
+            var toolIds = sheetOps.Select(o => o.ToolId!).Distinct().OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+
+            var programs = new List<ToolNcProgram>();
+            foreach (var toolId in toolIds)
+            {
+                var toolOps = sheetOps.Where(o => string.Equals(o.ToolId, toolId, StringComparison.OrdinalIgnoreCase)).ToList();
+                catalog.TryGetValue(toolId, out var def);
+                // Reserved for future machine M6 — RC must not invent ATC codes.
+                _ = toolChangePost.EmitToolChange(
+                    def ?? new ToolDefinition { ToolId = toolId, Name = toolId },
+                    profile);
+                var nc = post.Emit(toolOps, profile);
+                programs.Add(new ToolNcProgram
+                {
+                    ToolId = toolId,
+                    NcFileName = $"{jobId}_S{si + 1}_{toolId}.nc",
+                    NcText = nc,
+                    OpCount = toolOps.Count,
+                });
+            }
+
             var manifest = new
             {
                 schema = "cabinetnc.sheet-manifest",
-                schemaVersion = 1,
+                schemaVersion = 2,
                 jobId,
                 sheetIndex = si,
                 sheetLabel = $"S{si + 1}",
                 post = post.Id,
+                toolChangePost = toolChangePost.Id,
                 machineId = profile.Id,
                 panelIds,
                 toolIds,
                 opCount = sheetOps.Count,
                 files = new
                 {
-                    nc = $"{jobId}_S{si + 1}.nc",
                     dxf = $"{jobId}_S{si + 1}.dxf",
+                    programs = programs.Select(p => new { toolId = p.ToolId, nc = p.NcFileName, opCount = p.OpCount }),
                 },
+                programs = programs.Select(p => new { toolId = p.ToolId, nc = p.NcFileName, opCount = p.OpCount }),
             };
             sheets.Add(new SheetArtifact
             {
                 SheetIndex = si,
-                NcFileName = $"{jobId}_S{si + 1}.nc",
                 DxfFileName = $"{jobId}_S{si + 1}.dxf",
-                NcText = nc,
                 DxfText = dxf,
                 ManifestJson = JsonSerializer.Serialize(manifest, JsonOpts),
+                ToolPrograms = programs,
                 OpCount = sheetOps.Count,
                 PanelIds = panelIds,
                 ToolIds = toolIds,
@@ -163,20 +220,22 @@ public static class SheetBundleBuilder
         var root = new
         {
             schema = "cabinetnc.export-bundle",
-            schemaVersion = 1,
+            schemaVersion = 2,
             jobId,
             post = post.Id,
+            toolChangePost = toolChangePost.Id,
             machineId = profile.Id,
             sheetCount = sheets.Count,
+            outputPolicy = "sheet_x_tool_nc",
             sheets = sheets.Select(s => new
             {
                 sheetIndex = s.SheetIndex,
-                nc = s.NcFileName,
                 dxf = s.DxfFileName,
                 manifest = $"{jobId}_S{s.SheetIndex + 1}.manifest.json",
                 opCount = s.OpCount,
                 panelIds = s.PanelIds,
                 toolIds = s.ToolIds,
+                programs = s.ToolPrograms.Select(p => new { toolId = p.ToolId, nc = p.NcFileName, opCount = p.OpCount }),
             }),
         };
 
@@ -203,13 +262,16 @@ public static class SheetBundleBuilder
         var written = new List<string>();
         foreach (var s in bundle.Sheets)
         {
-            var ncPath = Path.Combine(directory, s.NcFileName);
+            foreach (var prog in s.ToolPrograms)
+            {
+                var ncPath = Path.Combine(directory, prog.NcFileName);
+                File.WriteAllText(ncPath, prog.NcText);
+                written.Add(ncPath);
+            }
             var dxfPath = Path.Combine(directory, s.DxfFileName);
             var manPath = Path.Combine(directory, $"{bundle.JobId}_S{s.SheetIndex + 1}.manifest.json");
-            File.WriteAllText(ncPath, s.NcText);
             File.WriteAllText(dxfPath, s.DxfText);
             File.WriteAllText(manPath, s.ManifestJson);
-            written.Add(ncPath);
             written.Add(dxfPath);
             written.Add(manPath);
         }

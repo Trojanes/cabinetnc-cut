@@ -97,7 +97,8 @@ public class PipelineAndStressTests
         Assert.True(bundle.Sheets.Count >= 2);
         Assert.False(string.IsNullOrWhiteSpace(bundle.BomCsv));
         Assert.Contains("A", bundle.LabelsHtml!);
-        Assert.All(bundle.Sheets, s => Assert.Contains("(tool ", s.NcText));
+        Assert.All(bundle.Sheets.SelectMany(s => s.ToolPrograms), p => Assert.Contains("(tool ", p.NcText));
+        Assert.All(bundle.Sheets, s => Assert.True(s.ToolPrograms.Count >= 1));
     }
 
     [Fact]

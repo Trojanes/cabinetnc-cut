@@ -2119,9 +2119,9 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(_session.PackageJson))
             File.WriteAllText(Path.Combine(dir, bundle.JobId + ".cut.json"), _session.PackageJson);
         try { File.Delete(dlg.FileName); } catch { /* marker optional */ }
-        SetStatus($"一键打包完成 · sheets={bundle.Sheets.Count} → {dir}");
+        SetStatus($"一键打包完成 · sheets={bundle.Sheets.Count} programs={bundle.Sheets.Sum(s => s.ToolPrograms.Count)} → {dir}");
         MessageBox.Show(this,
-            $"已写入 {written.Count} 个文件（每 Sheet 独立 NC/DXF/manifest）\nPost={bundle.PostId}\n\n目录:\n{dir}",
+            $"已写入 {written.Count} 个文件（每 Sheet×Tool 独立 NC；每 Sheet 一份 DXF/manifest）\nPost={bundle.PostId}\n\n目录:\n{dir}",
             "一键打包成功", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 

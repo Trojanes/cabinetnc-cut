@@ -34,11 +34,12 @@ public class SheetBundleBuilderTests
         var ops = OpsPlanner.AttachToNest(OpsPlanner.FeaturesToOps(panels), places);
         var bundle = SheetBundleBuilder.Build(pkg, places, ops, MachineCatalog.Get("nesting_router_6"));
         Assert.Equal(2, bundle.Sheets.Count);
-        Assert.Equal("demo_S1.nc", bundle.Sheets[0].NcFileName);
+        Assert.Contains(bundle.Sheets[0].ToolPrograms, p => p.NcFileName == "demo_S1_T1.nc");
         Assert.Equal("demo_S2.dxf", bundle.Sheets[1].DxfFileName);
-        Assert.Contains("sheet 1", bundle.Sheets[0].NcText);
-        Assert.DoesNotContain("(sheet 2)", bundle.Sheets[0].NcText);
+        Assert.Contains("sheet S1", bundle.Sheets[0].ToolPrograms[0].NcText);
+        Assert.DoesNotContain("(sheet S2)", bundle.Sheets[0].ToolPrograms[0].NcText);
         Assert.Contains("\"sheetCount\": 2", bundle.RootManifestJson.Replace("\r", ""));
+        Assert.Contains("sheet_x_tool_nc", bundle.RootManifestJson);
     }
 
     [Fact]
@@ -58,8 +59,10 @@ public class SheetBundleBuilderTests
         var ops = OpsPlanner.AttachToNest(OpsPlanner.FeaturesToOps(panels), places);
         var bundle = SheetBundleBuilder.Build(pkg, places, ops, MachineCatalog.Get("nesting_router_6"));
         Assert.Equal(3, bundle.Sheets.Count);
-        Assert.Equal(3, bundle.Sheets.Select(s => s.NcFileName).Distinct().Count());
+        Assert.Equal(3, bundle.Sheets.Select(s => s.DxfFileName).Distinct().Count());
+        Assert.True(bundle.Sheets.SelectMany(s => s.ToolPrograms).Count() >= 3);
         Assert.All(bundle.Sheets, s => Assert.False(string.IsNullOrWhiteSpace(s.DxfText)));
+        Assert.All(bundle.Sheets.SelectMany(s => s.ToolPrograms), p => Assert.False(string.IsNullOrWhiteSpace(p.NcText)));
     }
 
     [Fact]

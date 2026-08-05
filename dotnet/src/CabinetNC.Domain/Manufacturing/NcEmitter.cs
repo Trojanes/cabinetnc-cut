@@ -41,6 +41,19 @@ public static class NcEmitter
         };
         if (!string.IsNullOrWhiteSpace(profile.OriginNote))
             lines.Add($"(origin: {profile.OriginNote.Replace("(", "").Replace(")", "")})");
+
+        // Single-tool program header (Sheet×Tool export) — explicit feeds, no mixed tools
+        var distinctTools = all.Select(o => o.ToolId).Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (distinctTools.Count == 1 && catalog.TryGetValue(distinctTools[0]!, out var solo))
+        {
+            var sheetLabel = all.Count > 0 ? $"S{all[0].SheetIndex + 1}" : "S?";
+            lines.Add(
+                $"(sheet {sheetLabel} · ToolId={solo.ToolId} · DiameterMm={Fmt(solo.DiameterMm)} · FeedXY={Fmt(solo.FeedXyMmMin)} · FeedZ={Fmt(solo.FeedZMmMin)} · RPM={Math.Round(solo.SpindleRpm)})");
+            feedXy = solo.FeedXyMmMin > 0 ? solo.FeedXyMmMin : feedXy;
+            feedZ = solo.FeedZMmMin > 0 ? solo.FeedZMmMin : feedZ;
+            if (solo.SpindleRpm > 0) rpm = solo.SpindleRpm;
+        }
+
         lines.Add("G21");
         lines.Add("G90");
         if (profile.Dialect == "fanuc_like")
@@ -57,7 +70,8 @@ public static class NcEmitter
         var spindleOn = rpm > 0;
         foreach (var group in all.GroupBy(o => o.SheetIndex).OrderBy(g => g.Key))
         {
-            lines.Add($"(sheet {group.Key + 1})");
+            if (distinctTools.Count != 1)
+                lines.Add($"(sheet {group.Key + 1})");
             foreach (var item in CamSafety.OrderSafe(group))
             {
                 if (!string.IsNullOrWhiteSpace(item.ToolId) && item.ToolId != lastTool)
