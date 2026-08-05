@@ -5,6 +5,7 @@ Honest limits — do **not** treat these as done.
 ## CAM ordering (audited)
 
 - `CamSafety.OrderSafe` sorts **SequenceRank before PanelId** (sheet → rank → panel → tool → feature). All drills/grooves on a sheet complete before any outer contour, even across panels.
+- Over-deep grooves are **not** clamped in `ApplyPanelDepths`; `NcPreflight` / `DepthIssues` must still see the illegal depth (`groove_too_deep`).
 
 ## Dual-face CAM (Day 11 PARTIAL)
 

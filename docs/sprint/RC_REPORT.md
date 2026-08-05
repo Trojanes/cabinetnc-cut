@@ -12,7 +12,7 @@
 | Nest by material+thickness | Done (auto) | `GroupedBlfNesterTests` |
 | Clipper/AABB export hard gate | Done (auto) | `NestExportGate` |
 | Per-op ToolId | Done (auto) | `ToolBinderTests` |
-| Safe order + depth by thickness | Done (auto) | `CamSafetyTests` + audit `OrderSafe_runs_all_drills_before_any_outer_across_panels` |
+| Safe order + depth by thickness | Done (auto) | `CamSafetyTests` + order/depth audit tests (no silent groove clamp) |
 | Pocket area clear v1 | Done (auto) | `PocketClearerTests` (not boundary-only) |
 | Per-sheet NC/DXF/manifest | Done (auto) | `SheetBundleBuilderTests` |
 | Preflight blocks bad export | Done (auto) | dirty/nest/tool/depth/registration gates |

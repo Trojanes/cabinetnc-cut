@@ -48,8 +48,7 @@ public static class CamSafety
                 return op with { DepthMm = OuterContourDepthMm(th) };
             if (op.Op == "contour" && op.DepthMm is null or <= 0)
                 return op with { DepthMm = th }; // inner without depth → panel thickness
-            if (op.Op == "groove" && op.DepthMm is double gd && gd > th)
-                return op with { DepthMm = th }; // clamp illegal groove (preflight still flags)
+            // Do NOT clamp over-deep grooves here — Preflight DepthIssues must see the raw illegal depth.
             if (op.Op == "drill" && op.DepthMm is null or <= 0)
                 return op with { DepthMm = th };
             return op;
