@@ -11,7 +11,7 @@
 | Editable 2.5D workpiece | Done (auto) | Day 3–4 commits; undo/inspector/mirror tests |
 | Nest by material+thickness | Done (auto) | `GroupedBlfNesterTests` |
 | Clipper/AABB export hard gate | Done (auto) | `NestExportGate` |
-| Per-op ToolId | Done (auto) | `ToolBinderTests` |
+| Per-op ToolId | Done (auto) | `ToolBinderTests` + `ToolCatalogNcFeedAuditTests` (real S/F from catalog on tool change) |
 | Safe order + depth by thickness | Done (auto) | `CamSafetyTests` + order/depth audit tests (no silent groove clamp) |
 | Pocket area clear v1 | Done (auto) | `PocketClearerTests` + `PocketNcSegmentAuditTests` (disjoint segments; no cross-seg G1 / false close) |
 | Per-sheet NC/DXF/manifest | Done (auto) | `SheetBundleBuilderTests` |

@@ -5,9 +5,15 @@ using CabinetNC.Domain.Machines;
 /// <summary>Port of src/nc.js opsToNc (G0/G1/F/S — no arcs).</summary>
 public static class NcEmitter
 {
-    public static string OpsToNc(IEnumerable<CutOp> ops, MachineProfile profile)
+    public static string OpsToNc(
+        IEnumerable<CutOp> ops,
+        MachineProfile profile,
+        IReadOnlyDictionary<string, ToolDefinition>? tools = null)
     {
+        var catalog = tools ?? ToolCatalog.DefaultMap();
         var safeZ = profile.SafeZMm;
+        var feedXy = profile.FeedXyMmMin;
+        var feedZ = profile.FeedZMmMin;
         var rpm = profile.SpindleRpm;
         var list = ops.Where(o => o.Placed && o.Enabled).ToList();
         if (!profile.EnableContour) list = list.Where(o => o.Op is not ("contour" or "pocket")).ToList();
@@ -20,7 +26,12 @@ public static class NcEmitter
             (o.Path is { Count: >= 2 }))).ToList();
         var drills = list.Where(o => o.Op == "drill" && o.SheetX is not null).ToList();
         var grooves = list.Where(o => o.Op == "groove" && o.Path is { Count: >= 2 }).ToList();
-        var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves));
+        var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves)).ToList();
+
+        // Prefer first bound tool's spindle over bare machine default when present
+        var firstToolId = all.Select(o => o.ToolId).FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
+        if (firstToolId is not null && catalog.TryGetValue(firstToolId, out var firstTool) && firstTool.SpindleRpm > 0)
+            rpm = firstTool.SpindleRpm;
 
         var lines = new List<string>
         {
@@ -43,6 +54,7 @@ public static class NcEmitter
         lines.Add($"G0 Z{Fmt(safeZ)}");
 
         string? lastTool = null;
+        var spindleOn = rpm > 0;
         foreach (var group in all.GroupBy(o => o.SheetIndex).OrderBy(g => g.Key))
         {
             lines.Add($"(sheet {group.Key + 1})");
@@ -51,16 +63,28 @@ public static class NcEmitter
                 if (!string.IsNullOrWhiteSpace(item.ToolId) && item.ToolId != lastTool)
                 {
                     lines.Add($"(tool {item.ToolId})");
+                    if (catalog.TryGetValue(item.ToolId, out var def))
+                    {
+                        feedXy = def.FeedXyMmMin > 0 ? def.FeedXyMmMin : feedXy;
+                        feedZ = def.FeedZMmMin > 0 ? def.FeedZMmMin : feedZ;
+                        if (def.SpindleRpm > 0 && (lastTool is null || Math.Abs(def.SpindleRpm - rpm) > 1e-6))
+                        {
+                            rpm = def.SpindleRpm;
+                            lines.Add($"S{Math.Round(rpm)} M3");
+                            spindleOn = true;
+                        }
+                    }
                     lastTool = item.ToolId;
                 }
-                if (item.Op == "contour") EmitContour(lines, item, profile);
-                else if (item.Op == "pocket") EmitPocket(lines, item, profile);
-                else if (item.Op == "drill") EmitDrill(lines, item, profile);
-                else if (item.Op == "groove") EmitGroove(lines, item, profile);
+
+                if (item.Op == "contour") EmitContour(lines, item, profile, feedXy, feedZ);
+                else if (item.Op == "pocket") EmitPocket(lines, item, profile, feedXy, feedZ);
+                else if (item.Op == "drill") EmitDrill(lines, item, profile, feedZ);
+                else if (item.Op == "groove") EmitGroove(lines, item, profile, feedXy, feedZ);
             }
         }
 
-        if (rpm > 0) lines.Add("M5");
+        if (spindleOn) lines.Add("M5");
         var end = (profile.ProgramEnd ?? "M2").ToUpperInvariant();
         lines.Add(end == "M30" ? "M30" : "M2");
         return string.Join("\n", lines) + "\n";
@@ -79,14 +103,12 @@ public static class NcEmitter
         return depths;
     }
 
-    static void EmitContour(List<string> lines, CutOp c, MachineProfile profile)
+    static void EmitContour(List<string> lines, CutOp c, MachineProfile profile, double feed, double feedZ)
     {
         var path = c.Path!;
         var safeZ = profile.SafeZMm;
         var total = Math.Abs(c.DepthMm ?? profile.ContourDepthMm);
         var passes = ContourPassDepths(total, profile.ContourStepdownMm);
-        var feed = profile.FeedXyMmMin;
-        var feedZ = profile.FeedZMmMin;
         lines.Add($"(contour {c.PanelId} tool={c.ToolId ?? "-"} depth={Fmt(total)}{(passes.Count > 1 ? $" passes={passes.Count}" : "")})");
         lines.Add($"G0 X{Fmt(path[0].X)} Y{Fmt(path[0].Y)}");
         for (var p = 0; p < passes.Count; p++)
@@ -107,18 +129,15 @@ public static class NcEmitter
     /// Pocket: each scan segment is plunge→cut; G0 between segments (no cross-area G1).
     /// Finish loop is a separate closed contour; zigzag is never closed back to path[0].
     /// </summary>
-    static void EmitPocket(List<string> lines, CutOp c, MachineProfile profile)
+    static void EmitPocket(List<string> lines, CutOp c, MachineProfile profile, double feed, double feedZ)
     {
         var safeZ = profile.SafeZMm;
         var total = Math.Abs(c.DepthMm ?? profile.ContourDepthMm);
         var stepdown = c.StepdownMm is double sd && sd > 0 ? sd : profile.ContourStepdownMm;
         var passes = ContourPassDepths(total, stepdown);
-        var feed = profile.FeedXyMmMin;
-        var feedZ = profile.FeedZMmMin;
         var segments = c.PathSegments;
         if (segments is null || segments.Count == 0)
         {
-            // Legacy flat path fallback — still avoid contour-style close
             if (c.Path is not { Count: >= 2 }) return;
             lines.Add($"(pocket {c.PanelId} tool={c.ToolId ?? "-"} depth={Fmt(total)} legacy-flat)");
             EmitOpenPolylinePasses(lines, c.Path, passes, safeZ, feed, feedZ);
@@ -179,12 +198,11 @@ public static class NcEmitter
         }
     }
 
-    static void EmitDrill(List<string> lines, CutOp d, MachineProfile profile)
+    static void EmitDrill(List<string> lines, CutOp d, MachineProfile profile, double feedZ)
     {
         var safeZ = profile.SafeZMm;
         var total = Math.Abs(d.DepthMm ?? 0);
         var peck = Math.Abs(profile.DrillPeckMm);
-        var feedZ = profile.FeedZMmMin;
         lines.Add($"(drill {d.PanelId} dia={d.DiameterMm})");
         lines.Add($"G0 X{Fmt(d.SheetX)} Y{Fmt(d.SheetY)}");
         if (!(peck > 0) || peck >= total - 1e-9)
@@ -202,21 +220,18 @@ public static class NcEmitter
         lines.Add($"G0 Z{Fmt(safeZ)}");
     }
 
-    static void EmitGroove(List<string> lines, CutOp g, MachineProfile profile)
+    static void EmitGroove(List<string> lines, CutOp g, MachineProfile profile, double feed, double feedZ)
     {
         var path = g.Path!;
         var safeZ = profile.SafeZMm;
         var z = -Math.Abs(g.DepthMm ?? 0);
-        var feed = profile.FeedXyMmMin;
         lines.Add($"(groove {g.PanelId})");
         lines.Add($"G0 X{Fmt(path[0].X)} Y{Fmt(path[0].Y)}");
-        lines.Add($"G1 Z{Fmt(z)} F{profile.FeedZMmMin}");
+        lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
         for (var i = 1; i < path.Count; i++)
             lines.Add($"G1 X{Fmt(path[i].X)} Y{Fmt(path[i].Y)} F{feed}");
         lines.Add($"G0 Z{Fmt(safeZ)}");
     }
-
-    static IEnumerable<CutOp> SortOps(IEnumerable<CutOp> items) => CamSafety.OrderSafe(items);
 
     static string Fmt(double? n) => (Math.Round(n ?? 0, 3)).ToString("0.###");
 }

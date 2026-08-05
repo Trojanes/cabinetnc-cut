@@ -31,9 +31,9 @@ Honest limits — do **not** treat these as done.
 
 ## Post / tools
 
-- Per-sheet single NC with `(tool Tn)` comments. **Not** split-by-tool files.
+- Per-sheet single NC with `(tool Tn)` comments **and** real `S`/`F` from `ToolCatalog` on tool change (machine profile is fallback only). **Not** split-by-tool files.
 - Tool IDs ASSUMED T1/T2/T3 presets — shop must confirm magazine numbers.
-- **Open audit:** ToolCatalog per-tool Feed/RPM may not yet drive real `S`/`F` on tool change (still machine-profile global) — Fix 4 pending.
+- No automatic `M6` tool-change macro — shop post may need to wrap magazine moves.
 
 ## UIA
 
