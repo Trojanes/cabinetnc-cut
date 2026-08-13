@@ -9,7 +9,7 @@ using CabinetNC.Domain.Nesting;
 public interface IPostProcessor
 {
     string Id { get; }
-    string Emit(IEnumerable<CutOp> ops, MachineProfile profile);
+    string Emit(IEnumerable<CutOp> ops, MachineProfile profile, PostRecipe? recipe = null);
 }
 
 /// <summary>
@@ -31,10 +31,10 @@ public sealed class NullToolChangePost : IToolChangePost
 public sealed class GenericMmPostProcessor : IPostProcessor
 {
     public string Id => "generic_mm";
-    public string Emit(IEnumerable<CutOp> ops, MachineProfile profile)
+    public string Emit(IEnumerable<CutOp> ops, MachineProfile profile, PostRecipe? recipe = null)
     {
         var p = CloneProfile(profile, dialect: "generic", programEnd: profile.ProgramEnd);
-        return NcEmitter.OpsToNc(ops, p);
+        return NcEmitter.OpsToNc(ops, p, recipe: recipe);
     }
 
     internal static MachineProfile CloneProfile(MachineProfile profile, string dialect, string? programEnd) =>
@@ -62,10 +62,10 @@ public sealed class GenericMmPostProcessor : IPostProcessor
 public sealed class FanucLikePostProcessor : IPostProcessor
 {
     public string Id => "fanuc_like";
-    public string Emit(IEnumerable<CutOp> ops, MachineProfile profile)
+    public string Emit(IEnumerable<CutOp> ops, MachineProfile profile, PostRecipe? recipe = null)
     {
         var p = GenericMmPostProcessor.CloneProfile(profile, "fanuc_like", "M30");
-        return NcEmitter.OpsToNc(ops, p);
+        return NcEmitter.OpsToNc(ops, p, recipe: recipe);
     }
 }
 
@@ -132,7 +132,8 @@ public static class SheetBundleBuilder
         FaceRegistration? registration = null,
         bool enforcePreflight = true,
         IToolChangePost? toolChangePost = null,
-        IReadOnlyDictionary<string, ToolDefinition>? tools = null)
+        IReadOnlyDictionary<string, ToolDefinition>? tools = null,
+        PostRecipe? recipe = null)
     {
         post ??= PostProcessorCatalog.Resolve(profile);
         toolChangePost ??= new NullToolChangePost();
@@ -174,7 +175,7 @@ public static class SheetBundleBuilder
                 _ = toolChangePost.EmitToolChange(
                     def ?? new ToolDefinition { ToolId = toolId, Name = toolId },
                     profile);
-                var nc = post.Emit(toolOps, profile);
+                var nc = post.Emit(toolOps, profile, recipe);
                 programs.Add(new ToolNcProgram
                 {
                     ToolId = toolId,

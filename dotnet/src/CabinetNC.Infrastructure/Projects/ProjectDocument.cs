@@ -9,6 +9,8 @@ public sealed class ProjectDocument
     public string MachineId { get; init; } = "osai_e4_1325";
     public string? NestPlacementsJson { get; init; }
     public string? NcText { get; init; }
+    /// <summary>Stage 2–5 session: CAM, bridges, ops, stock, nest sheets.</summary>
+    public string? SessionJson { get; init; }
     public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 

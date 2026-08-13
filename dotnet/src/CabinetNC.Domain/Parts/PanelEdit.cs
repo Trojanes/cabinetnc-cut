@@ -465,6 +465,24 @@ public static class PanelEdit
     public static bool IsGroove(PanelFeature f) =>
         f.Kind.Contains("groove", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsTongueGroove(PanelFeature f)
+    {
+        if (!IsGroove(f)) return false;
+        var blob = $"{f.Purpose} {f.Kind}";
+        return blob.Contains("tongue", StringComparison.OrdinalIgnoreCase)
+            || blob.Contains("半槽", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static Panel SetFeaturePurpose(Panel panel, string featureId, string? purpose)
+    {
+        var feats = panel.Features
+            .Select(f => f.FeatureId == featureId
+                ? CloneFeature(f, purpose: purpose, replacePurpose: true)
+                : f)
+            .ToList();
+        return ClonePanel(panel, feats);
+    }
+
     public static bool IsCutout(PanelFeature f) =>
         f.Kind.Contains("cutout", StringComparison.OrdinalIgnoreCase)
         || (f.Through && f.Kind.Contains("pocket", StringComparison.OrdinalIgnoreCase)
@@ -523,7 +541,9 @@ public static class PanelEdit
         double? x = null,
         double? y = null,
         IReadOnlyList<Point2>? path = null,
-        IReadOnlyList<Point2>? profile = null) =>
+        IReadOnlyList<Point2>? profile = null,
+        string? purpose = null,
+        bool replacePurpose = false) =>
         new()
         {
             FeatureId = f.FeatureId,
@@ -531,7 +551,9 @@ public static class PanelEdit
             FaceId = f.FaceId,
             Through = f.Through,
             GroupId = f.GroupId,
-            Purpose = f.Purpose,
+            Purpose = replacePurpose
+                ? (string.IsNullOrWhiteSpace(purpose) ? null : purpose)
+                : f.Purpose,
             SourceRelationshipId = f.SourceRelationshipId,
             X = x ?? f.X,
             Y = y ?? f.Y,

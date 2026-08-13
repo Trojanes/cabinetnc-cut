@@ -34,6 +34,12 @@ public sealed record CutOp
     public string? Side { get; init; }
     public int SequenceGroup { get; init; }
     public bool Enabled { get; init; } = true;
+    /// <summary>Tongue-receiving half groove — T1. All other grooves are T2.</summary>
+    public bool IsTongue { get; init; }
+    /// <summary>Panel thickness (mm). Needed when Z0 is the board bottom.</summary>
+    public double? ThicknessMm { get; init; }
+    /// <summary>Through feature — last Z uses through overshoot, not blind depth.</summary>
+    public bool Through { get; init; }
 }
 
 /// <summary>Port of src/ops.js featuresToOps + attachOpsToNest (contour + drill + groove).</summary>
@@ -43,8 +49,12 @@ public static class OpsPlanner
         IEnumerable<Parts.Panel> panels,
         bool enableContour = true,
         bool enableDrill = true,
-        bool enableGroove = true)
+        bool enableGroove = true,
+        double clearanceLargeMinShortMm = ClearanceToolPick.LargeMinShortMm,
+        double drillMaxExclusiveMm = ClearanceToolPick.DrillMaxExclusiveMm)
     {
+        clearanceLargeMinShortMm = ClearanceToolPick.NormalizeLargeMinShortMm(clearanceLargeMinShortMm);
+        drillMaxExclusiveMm = ClearanceToolPick.NormalizeDrillMaxExclusiveMm(drillMaxExclusiveMm);
         var ops = new List<CutOp>();
         var panelList = panels.ToList();
         foreach (var panel in panelList)
@@ -61,11 +71,13 @@ public static class OpsPlanner
                     PanelBounds = bounds,
                     DepthMm = CamSafety.OuterContourDepthMm(panel.ThicknessMm),
                     Side = panel.Side ?? panel.Orientation?.MillingFace,
+                    ThicknessMm = panel.ThicknessMm,
+                    Through = true,
                 });
             }
             foreach (var f in panel.Features)
             {
-                if (enableDrill && f.Kind.Contains("hole", StringComparison.OrdinalIgnoreCase))
+                if (enableDrill && ClearanceToolPick.IsDrillHole(f, drillMaxExclusiveMm))
                 {
                     ops.Add(new CutOp
                     {
@@ -78,11 +90,26 @@ public static class OpsPlanner
                         DepthMm = f.DepthMm ?? panel.ThicknessMm,
                         PanelBounds = bounds,
                         Side = panel.Side ?? panel.Orientation?.MillingFace,
+                        ThicknessMm = panel.ThicknessMm,
+                        Through = f.Through,
                     });
+                }
+                else if (enableContour
+                    && Parts.PanelEdit.IsHole(f)
+                    && ClearanceToolPick.CupOutline(f) is { Count: >= 3 } holeOutline)
+                {
+                    AddPocketOp(ops, panel, f, holeOutline, bounds, clearanceLargeMinShortMm);
+                }
+                else if (enableContour
+                    && ClearanceToolPick.IsHingeFeature(f)
+                    && ClearanceToolPick.CupOutline(f) is { Count: >= 3 } cupOutline)
+                {
+                    AddPocketOp(ops, panel, f, cupOutline, bounds, clearanceLargeMinShortMm);
                 }
                 else if (enableGroove && f.Kind.Contains("groove", StringComparison.OrdinalIgnoreCase)
                          && f.Path is { Count: >= 2 } path)
                 {
+                    var isTongue = Parts.PanelEdit.IsTongueGroove(f);
                     ops.Add(new CutOp
                     {
                         Op = "groove",
@@ -93,34 +120,21 @@ public static class OpsPlanner
                         Path = path.Select(p => (p.X, p.Y)).ToList(),
                         PanelBounds = bounds,
                         Side = panel.Side ?? panel.Orientation?.MillingFace,
+                        IsTongue = isTongue,
+                        ToolId = isTongue
+                            ? TroyRecipe.TongueToolId
+                            : ClearanceToolPick.Pick(f, clearanceLargeMinShortMm),
+                        ThicknessMm = panel.ThicknessMm,
+                        Through = f.Through,
                     });
                 }
                 else if (enableContour && f.Kind.Contains("pocket", StringComparison.OrdinalIgnoreCase)
                          && f.Path is { Count: >= 3 } pocketPath)
                 {
-                    var outline = pocketPath.Select(p => (p.X, p.Y)).ToList();
-                    var tool = ToolCatalog.DefaultPresets.First(t => t.ToolId == "T1");
-                    var cleared = PocketClearer.Clear(new PocketClearer.PocketClearRequest
-                    {
-                        Outline = outline,
-                        ToolDiameterMm = tool.DiameterMm,
-                    });
-                    ops.Add(new CutOp
-                    {
-                        Op = "pocket",
-                        PanelId = panel.PanelId,
-                        FeatureId = f.FeatureId,
-                        // Do NOT default to panel thickness — missing depth is a preflight error.
-                        DepthMm = f.DepthMm,
-                        Path = cleared.Path,
-                        PathSegments = cleared.Segments,
-                        FinishLoop = cleared.FinishLoop,
-                        ClosePath = false,
-                        PocketTooSmallForTool = cleared.TooSmallForTool,
-                        PanelBounds = bounds,
-                        Side = panel.Side ?? panel.Orientation?.MillingFace,
-                        StepdownMm = tool.DiameterMm * 0.5,
-                    });
+                    AddPocketOp(
+                        ops, panel, f,
+                        pocketPath.Select(p => (p.X, p.Y)).ToList(),
+                        bounds, clearanceLargeMinShortMm);
                 }
                 else if (enableContour && f.Kind.Contains("cutout", StringComparison.OrdinalIgnoreCase)
                          && f.Path is { Count: >= 3 } cutPath)
@@ -134,6 +148,8 @@ public static class OpsPlanner
                         Path = cutPath.Select(p => (p.X, p.Y)).ToList(),
                         PanelBounds = bounds,
                         Side = panel.Side ?? panel.Orientation?.MillingFace,
+                        ThicknessMm = panel.ThicknessMm,
+                        Through = true,
                     });
                 }
             }
@@ -143,6 +159,41 @@ public static class OpsPlanner
         var bound = ToolBinder.BindAll(ops);
         var depthApplied = CamSafety.ApplyPanelDepths(bound, byId);
         return CamSafety.OrderSafe(depthApplied).ToList();
+    }
+
+    static void AddPocketOp(
+        List<CutOp> ops,
+        Parts.Panel panel,
+        Parts.PanelFeature f,
+        IReadOnlyList<(double X, double Y)> outline,
+        Nesting.LocalBounds? bounds,
+        double clearanceLargeMinShortMm)
+    {
+        var toolId = ClearanceToolPick.Pick(f, clearanceLargeMinShortMm);
+        var toolDia = ClearanceToolPick.DiameterOf(toolId);
+        var cleared = PocketClearer.Clear(new PocketClearer.PocketClearRequest
+        {
+            Outline = outline,
+            ToolDiameterMm = toolDia,
+        });
+        ops.Add(new CutOp
+        {
+            Op = "pocket",
+            PanelId = panel.PanelId,
+            FeatureId = f.FeatureId,
+            DepthMm = f.DepthMm,
+            Path = cleared.Path,
+            PathSegments = cleared.Segments,
+            FinishLoop = cleared.FinishLoop,
+            ClosePath = false,
+            PocketTooSmallForTool = cleared.TooSmallForTool,
+            PanelBounds = bounds,
+            Side = panel.Side ?? panel.Orientation?.MillingFace,
+            StepdownMm = toolDia * 0.5,
+            ToolId = toolId,
+            ThicknessMm = panel.ThicknessMm,
+            Through = f.Through,
+        });
     }
 
     public static IReadOnlyList<CutOp> AttachToNest(IEnumerable<CutOp> ops, IEnumerable<Nesting.NestPlacement> placements)
@@ -173,8 +224,8 @@ public static class OpsPlanner
             {
                 var (sx, sy) = Nesting.NestTransform.ToSheet(
                     x, y, bounds, place.OffsetX, place.OffsetY, place.RotationDeg);
-                sheetX = Math.Round(sx, 3);
-                sheetY = Math.Round(sy, 3);
+                sheetX = RoundSheet(sx);
+                sheetY = RoundSheet(sy);
             }
             else if (op.Path is { Count: > 0 } || op.PathSegments is { Count: > 0 })
             {
@@ -182,7 +233,7 @@ public static class OpsPlanner
                 {
                     var (sx, sy) = Nesting.NestTransform.ToSheet(
                         p.X, p.Y, bounds, place.OffsetX, place.OffsetY, place.RotationDeg);
-                    return (Math.Round(sx, 3), Math.Round(sy, 3));
+                    return (RoundSheet(sx), RoundSheet(sy));
                 }
 
                 if (op.Path is { Count: > 0 })
@@ -208,5 +259,9 @@ public static class OpsPlanner
             };
         }).ToList();
     }
+
+    /// <summary>OSAI-Troy FORMAT X/Y 1.4 — keep a real fourth decimal, not millimetre-rounded then padded.</summary>
+    static double RoundSheet(double v) =>
+        Math.Round(v, 4, MidpointRounding.AwayFromZero);
 
 }

@@ -5,7 +5,7 @@ using Clipper2Lib;
 /// <summary>Clipper2 contour compensation in sheet-space millimetres.</summary>
 public static class ContourToolOffset
 {
-    const double Scale = 1000;
+    const double Scale = 10000;
 
     public static IReadOnlyList<CutOp> Apply(IEnumerable<CutOp> ops, double offsetMm)
     {

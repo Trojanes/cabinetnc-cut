@@ -34,7 +34,7 @@ public class SheetBundleBuilderTests
         var ops = OpsPlanner.AttachToNest(OpsPlanner.FeaturesToOps(panels), places);
         var bundle = SheetBundleBuilder.Build(pkg, places, ops, MachineCatalog.Get("nesting_router_6"));
         Assert.Equal(2, bundle.Sheets.Count);
-        Assert.Contains(bundle.Sheets[0].ToolPrograms, p => p.NcFileName == "demo_S1_T1.nc");
+        Assert.Contains(bundle.Sheets[0].ToolPrograms, p => p.NcFileName == "demo_S1_T2.nc");
         Assert.Equal("demo_S2.dxf", bundle.Sheets[1].DxfFileName);
         Assert.Contains("sheet S1", bundle.Sheets[0].ToolPrograms[0].NcText);
         Assert.DoesNotContain("(sheet S2)", bundle.Sheets[0].ToolPrograms[0].NcText);

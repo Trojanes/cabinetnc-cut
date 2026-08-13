@@ -12,7 +12,7 @@ public class ManufacturingSnapshotImporterTests
         var json = SnapshotJson(
             """
             [
-              {"featureId":"H1","kind":"bore","sourceFace":"A","geometry":{"center":[20,30],"diameterMm":5},"depthMm":12,"through":false},
+              {"featureId":"H1","kind":"bore","sourceFace":"A","geometry":{"center":[20,30],"diameterMm":3},"depthMm":12,"through":false},
               {"featureId":"G1","kind":"groove","sourceFace":"A","geometry":{"centerline":[[10,15],[90,15]],"widthMm":6},"depthMm":8,"through":false},
               {"featureId":"P1","kind":"pocket","sourceFace":"A","geometry":{"profile":{"closed":true,"points":[[30,20],[60,20],[60,40],[30,40]]}},"depthMm":5,"through":false},
               {"featureId":"T1","kind":"throughProfile","sourceFace":"THROUGH","geometry":{"profile":{"closed":true,"points":[[70,20],[85,20],[85,35],[70,35]]}},"through":true}
@@ -352,11 +352,69 @@ public class ManufacturingSnapshotImporterTests
         Assert.Equal("throughCutout", cut.Kind);
         Assert.True(cut.Through);
         Assert.Equal("THROUGH", cut.FaceId);
-        Assert.True(cut.Path is { Count: >= 3 });
+        // Untagged sharp 55×15.5 must stay sharp (could be a real rectangular through hole).
+        Assert.Equal(4, cut.Path!.Count);
+        Assert.Equal(4, cut.Profile!.Count);
 
         var ops = OpsPlanner.FeaturesToOps(result.Package.Panels);
         Assert.Contains(ops, op => op.Op == "contour" && op.FeatureId == cut.FeatureId);
         Assert.DoesNotContain(ops, op => op.Op == "groove" && op.FeatureId == cut.FeatureId);
+    }
+
+    [Fact]
+    public void Tagged_lock_sharp_rectangle_imports_as_stadium()
+    {
+        var json = SnapshotJson(
+            """
+            [
+              {
+                "featureId":"LOCK-1",
+                "kind":"throughProfile",
+                "sourceFace":"THROUGH",
+                "geometry":{
+                  "profile":{"closed":true,"points":[[20,34.75],[75,34.75],[75,50.25],[20,50.25]]}
+                },
+                "depthMm":16,
+                "through":true,
+                "intent":{"purpose":"lock_cutout","operationType":"LOCK_CUTOUT"}
+              }
+            ]
+            """);
+
+        var result = ManufacturingSnapshotImporter.FromJson(json);
+
+        Assert.True(result.Ok, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var cut = Assert.Single(result.Package!.Panels.Single().Features);
+        Assert.Equal("throughCutout", cut.Kind);
+        Assert.True(cut.Path is { Count: > 8 });
+        Assert.True(cut.Profile is { Count: > 8 });
+    }
+
+    [Fact]
+    public void Hand_drawn_hasArc_sharp_rectangle_imports_as_stadium()
+    {
+        var json = SnapshotJson(
+            """
+            [
+              {
+                "featureId":"HAND-1",
+                "kind":"throughProfile",
+                "sourceFace":"THROUGH",
+                "hasArc":true,
+                "geometry":{
+                  "profile":{"closed":true,"points":[[0,0],[55,0],[55,15.5],[0,15.5]]}
+                },
+                "depthMm":16,
+                "through":true
+              }
+            ]
+            """);
+
+        var result = ManufacturingSnapshotImporter.FromJson(json);
+
+        Assert.True(result.Ok, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var cut = Assert.Single(result.Package!.Panels.Single().Features);
+        Assert.True(cut.Path is { Count: > 8 });
     }
 
     [Fact]

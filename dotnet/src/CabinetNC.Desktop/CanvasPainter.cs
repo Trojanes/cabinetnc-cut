@@ -135,7 +135,21 @@ static class CanvasPainter
         string Title,
         string Detail,
         SKRect Box,
-        IReadOnlyList<(double X, double Y)> Outline);
+        IReadOnlyList<(double X, double Y)> Outline,
+        string GroupKey,
+        string GroupLabel);
+
+    public readonly record struct NestHoldingRegion(
+        string GroupKey,
+        string Label,
+        SKRect Bounds,
+        int Count);
+
+    public readonly record struct HoldPreviewPart(
+        string PanelId,
+        double Ox,
+        double Oy,
+        double Rot);
 
     public readonly record struct NestPaintOpts(
         float SheetW,
@@ -153,7 +167,21 @@ static class CanvasPainter
         string? GuillotineLabel = null,
         float HoldingBayLeft = 0,
         IReadOnlyList<NestHoldingItem>? HoldingItems = null,
-        string? HoldingDragId = null);
+        IReadOnlyList<NestHoldingRegion>? HoldingRegions = null,
+        string? HoldingDragId = null,
+        IReadOnlyList<HoldPreviewPart>? HoldPreviews = null,
+        bool HoldPreviewBlocked = false,
+        (double X, double Y)? DragGuideFrom = null,
+        (double X, double Y)? DragGuideTo = null,
+        (double X, double Y)? MeasureFrom = null,
+        (double X, double Y)? MeasureTo = null,
+        IReadOnlySet<string>? SelectedIds = null,
+        (double X0, double Y0, double X1, double Y1)? SelectionBox = null,
+        bool SelectionCrossing = false,
+        CamStrategyKind? HighlightStrategy = null,
+        TroyPassKind? HighlightPass = null,
+        OpsToolpathKind? HighlightToolpath = null,
+        IReadOnlyList<ProfileBridge>? Bridges = null);
 
     public static void PaintNest(
         SKCanvas canvas,
@@ -187,14 +215,17 @@ static class CanvasPainter
 
         var byId = panels.ToDictionary(p => p.PanelId);
         var sheetIdx = Math.Max(0, opts.ActiveSheetIndex);
+        var selectedIds = opts.SelectedIds;
         var drawList = placements.Where(p => p.SheetIndex == sheetIdx).ToList();
-        if (opts.SelectedId is not null)
-            drawList = drawList.OrderBy(p => p.PanelId == opts.SelectedId ? 1 : 0).ToList();
+        if (selectedIds is { Count: > 0 } || opts.SelectedId is not null)
+            drawList = drawList.OrderBy(p =>
+                selectedIds?.Contains(p.PanelId) == true || p.PanelId == opts.SelectedId ? 1 : 0).ToList();
 
         foreach (var place in drawList)
         {
             if (!byId.TryGetValue(place.PanelId, out var panel)) continue;
-            var active = opts.SelectedId == place.PanelId;
+            var active = opts.SelectedId == place.PanelId
+                         || (selectedIds?.Contains(place.PanelId) ?? false);
             var conflict = opts.Conflicts.Contains(place.PanelId);
             var locked = opts.Locked.Contains(place.PanelId);
             var bounds = NestTransform.BoundsOf(panel);
@@ -283,6 +314,19 @@ static class CanvasPainter
             }
         }
 
+        if (opts.HoldPreviews is { Count: > 0 } previews)
+        {
+            var showDims = previews.Count == 1;
+            foreach (var preview in previews)
+            {
+                if (!byId.TryGetValue(preview.PanelId, out var previewPanel)) continue;
+                DrawHoldPreview(
+                    canvas, previewPanel, ToSx, ToSy, pad, scale, sh,
+                    preview.Ox, preview.Oy, preview.Rot,
+                    opts.HoldPreviewBlocked, showDims);
+            }
+        }
+
         if (drawList.Count == 0)
             DrawText(canvas, $"本张大板无摆位（第 {sheetIdx + 1} 张）", pad + 8, pad + 20, 12, new SKColor(0x66, 0x66, 0x66));
 
@@ -317,19 +361,38 @@ static class CanvasPainter
             }
         }
 
+        if (opts.DragGuideFrom is { } from && opts.DragGuideTo is { } to)
+            DrawDragGuide(canvas, ToSx, ToSy, from, to);
+
+        if (opts.MeasureFrom is { } mFrom && opts.MeasureTo is { } mTo)
+            DrawMeasureGuide(canvas, ToSx, ToSy, mFrom, mTo);
+
+        if (opts.SelectionBox is { } box)
+            DrawSelectionBox(canvas, ToSx, ToSy, box, opts.SelectionCrossing);
+
         if (opts.ShowOps && opts.OpsOverlay is { Count: > 0 } ops)
-            PaintOpsOverlay(canvas, ops, ToSx, ToSy, scale, opts.ActiveCamFrame);
+            PaintOpsOverlay(canvas, ops, ToSx, ToSy, scale, opts.ActiveCamFrame, opts.ActiveSheetIndex,
+                opts.HighlightStrategy);
+
+        if (opts.ShowOps && opts.Bridges is { Count: > 0 } bridges)
+            PaintBridges(canvas, bridges, ToSx, ToSy, scale, opts.ActiveSheetIndex);
 
         if (opts.HoldingBayLeft > 0 && opts.HoldingBayLeft < w - 4)
-            PaintHoldingBay(canvas, w, h, opts.HoldingBayLeft, opts.HoldingItems, opts.SelectedId, opts.HoldingDragId);
+            PaintHoldingBay(
+                canvas, w, h, opts.HoldingBayLeft,
+                opts.HoldingItems, opts.HoldingRegions,
+                opts.SelectedId, opts.HoldingDragId, opts.SelectedIds);
     }
 
     /// <summary>Wider bay so square multi-column cards fit beside the sheet.</summary>
     public const float NestHoldingBayWidth = 340f;
 
-    /// <summary>Layout holding-bay square cards in multiple columns (same geometry for hit-testing).</summary>
-    public static List<NestHoldingItem> LayoutHoldingItems(
-        IReadOnlyList<(string PanelId, string Title, string Detail, IReadOnlyList<(double X, double Y)> Outline)> items,
+    /// <summary>
+    /// Group by material/thickness into labeled sub-regions; cards are square multi-column
+    /// within each region (same geometry used for hit-testing).
+    /// </summary>
+    public static (List<NestHoldingItem> Items, List<NestHoldingRegion> Regions) LayoutHoldingItems(
+        IReadOnlyList<(string PanelId, string Title, string Detail, IReadOnlyList<(double X, double Y)> Outline, string GroupKey, string GroupLabel)> items,
         float bayLeft,
         float bayWidth,
         float canvasH,
@@ -337,27 +400,59 @@ static class CanvasPainter
         float bottomPad = 36f)
     {
         var list = new List<NestHoldingItem>();
+        var regions = new List<NestHoldingRegion>();
         const float gap = 8f;
         const float sidePad = 10f;
-        const float cell = 96f; // square cards
+        const float cell = 96f;
+        const float headerH = 22f;
+        const float regionGap = 12f;
         var innerW = Math.Max(cell, bayWidth - sidePad * 2);
         var cols = Math.Max(1, (int)Math.Floor((innerW + gap) / (cell + gap)));
-        var y0 = topPad;
         var maxY = canvasH - bottomPad;
-        for (var i = 0; i < items.Count; i++)
+        var yCursor = topPad;
+
+        foreach (var group in items
+                     .GroupBy(i => i.GroupKey, StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(g => g.First().GroupLabel, StringComparer.OrdinalIgnoreCase))
         {
-            var col = i % cols;
-            var row = i / cols;
-            var x = bayLeft + sidePad + col * (cell + gap);
-            var y = y0 + row * (cell + gap);
-            if (y + cell > maxY) break;
-            var it = items[i];
-            list.Add(new NestHoldingItem(
-                it.PanelId, it.Title, it.Detail,
-                new SKRect(x, y, x + cell, y + cell),
-                it.Outline));
+            var groupItems = group.ToList();
+            var label = groupItems[0].GroupLabel;
+            var rows = (int)Math.Ceiling(groupItems.Count / (double)cols);
+            var contentH = rows * cell + Math.Max(0, rows - 1) * gap;
+            var regionTop = yCursor;
+            var regionBottom = regionTop + headerH + 4 + contentH + 8;
+            if (regionTop + headerH > maxY) break;
+
+            var cardsTop = regionTop + headerH + 4;
+            var before = list.Count;
+            for (var i = 0; i < groupItems.Count; i++)
+            {
+                var col = i % cols;
+                var row = i / cols;
+                var x = bayLeft + sidePad + col * (cell + gap);
+                var y = cardsTop + row * (cell + gap);
+                if (y + cell > maxY) break;
+                var it = groupItems[i];
+                list.Add(new NestHoldingItem(
+                    it.PanelId, it.Title, it.Detail,
+                    new SKRect(x, y, x + cell, y + cell),
+                    it.Outline, it.GroupKey, it.GroupLabel));
+            }
+
+            var placedInGroup = list.Count - before;
+            if (placedInGroup == 0) break;
+
+            regionBottom = Math.Min(maxY, cardsTop + contentH + 8);
+            regions.Add(new NestHoldingRegion(
+                group.Key,
+                $"{label} · {placedInGroup}",
+                new SKRect(bayLeft + 6, regionTop, bayLeft + bayWidth - 6, regionBottom),
+                placedInGroup));
+            yCursor = regionBottom + regionGap;
+            if (yCursor >= maxY) break;
         }
-        return list;
+
+        return (list, regions);
     }
 
     static void PaintHoldingBay(
@@ -366,8 +461,10 @@ static class CanvasPainter
         int h,
         float bayLeft,
         IReadOnlyList<NestHoldingItem>? items,
+        IReadOnlyList<NestHoldingRegion>? regions,
         string? selectedId,
-        string? dragId)
+        string? dragId,
+        IReadOnlySet<string>? selectedIds = null)
     {
         using (var fill = new SKPaint { Color = new SKColor(0xEE, 0xF1, 0xF4), IsAntialias = true })
             canvas.DrawRect(bayLeft, 0, w - bayLeft, h, fill);
@@ -375,7 +472,7 @@ static class CanvasPainter
             canvas.DrawLine(bayLeft, 0, bayLeft, h, edge);
 
         DrawText(canvas, "板件待用区", bayLeft + 10, 28, 13, new SKColor(0x33, 0x33, 0x33), bold: true);
-        DrawText(canvas, "从大板拖入 · 可拖回同材料大板", bayLeft + 10, 44, 10, new SKColor(0x77, 0x77, 0x77));
+        DrawText(canvas, "按材料分区 · Ctrl 多选 · 拖回同材料大板", bayLeft + 10, 44, 10, new SKColor(0x77, 0x77, 0x77));
 
         if (items is null || items.Count == 0)
         {
@@ -383,9 +480,36 @@ static class CanvasPainter
             return;
         }
 
+        if (regions is not null)
+        {
+            foreach (var region in regions)
+            {
+                using var band = new SKPaint
+                {
+                    Color = new SKColor(0xE3, 0xE8, 0xED),
+                    IsAntialias = true,
+                };
+                canvas.DrawRoundRect(region.Bounds, 6, 6, band);
+                using var bandStroke = new SKPaint
+                {
+                    Color = new SKColor(0xC0, 0xC6, 0xCC),
+                    IsStroke = true,
+                    StrokeWidth = 1,
+                    IsAntialias = true,
+                };
+                canvas.DrawRoundRect(region.Bounds, 6, 6, bandStroke);
+
+                var label = region.Label.Length > 36 ? region.Label[..35] + "…" : region.Label;
+                DrawText(canvas, label, region.Bounds.Left + 8, region.Bounds.Top + 16, 11,
+                    new SKColor(0x22, 0x44, 0x66), bold: true);
+            }
+        }
+
         foreach (var it in items)
         {
-            var active = it.PanelId == selectedId || it.PanelId == dragId;
+            var active = it.PanelId == selectedId
+                         || it.PanelId == dragId
+                         || (selectedIds?.Contains(it.PanelId) ?? false);
             using var fill = new SKPaint
             {
                 Color = active ? new SKColor(0xCC, 0xDD, 0xEE) : new SKColor(0xFF, 0xFF, 0xFF),
@@ -401,7 +525,6 @@ static class CanvasPainter
             canvas.DrawRoundRect(it.Box, 6, 6, fill);
             canvas.DrawRoundRect(it.Box, 6, 6, stroke);
 
-            // Shape preview in upper area; label under it.
             var shapeRect = new SKRect(
                 it.Box.Left + 8,
                 it.Box.Top + 8,
@@ -476,11 +599,18 @@ static class CanvasPainter
         Func<double, float> toSx,
         Func<double, float> toSy,
         float scale,
-        CamFrame? activeFrame)
+        CamFrame? activeFrame,
+        int sheetIndex,
+        CamStrategyKind? highlight)
     {
-        foreach (var op in ops.Where(o => o.Placed))
+        foreach (var op in ops.Where(o => o.Placed && o.SheetIndex == sheetIndex))
         {
+            var focused = highlight is null || CamStrategy.Classify(op) == highlight;
             var active = activeFrame?.Op == op;
+            var alpha = (byte)(focused ? 255 : 55);
+            SKColor Color(byte r, byte g, byte b) =>
+                active ? new SKColor(0xFF, 0xC1, 0x07) : new SKColor(r, g, b, alpha);
+
             if (op.Op == "contour" && op.Path is { Count: >= 2 } path)
             {
                 using var sk = new SKPath();
@@ -491,15 +621,23 @@ static class CanvasPainter
                     if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
                 }
                 sk.Close();
-                using var paint = new SKPaint
+                using (var first = new SKPaint
                 {
-                    Color = active ? new SKColor(0xFF, 0xC1, 0x07) : new SKColor(0x0A, 0xA4, 0x44),
+                    Color = Color(0x22, 0x77, 0xCC),
                     IsStroke = true,
-                    StrokeWidth = active ? 4f : 2f,
+                    StrokeWidth = active ? 4f : focused ? 2.4f : 1.4f,
                     IsAntialias = true,
-                    PathEffect = SKPathEffect.CreateDash([6, 4], 0),
-                };
-                canvas.DrawPath(sk, paint);
+                })
+                    canvas.DrawPath(sk, first);
+                using (var last = new SKPaint
+                {
+                    Color = Color(0xC0, 0x39, 0x2B),
+                    IsStroke = true,
+                    StrokeWidth = active ? 3f : focused ? 1.8f : 1.2f,
+                    IsAntialias = true,
+                    PathEffect = SKPathEffect.CreateDash([7, 5], 0),
+                })
+                    canvas.DrawPath(sk, last);
             }
             else if (op.Op == "drill" && op.SheetX is double sx0 && op.SheetY is double sy0)
             {
@@ -508,14 +646,71 @@ static class CanvasPainter
                 var r = Math.Max(2f, (float)((op.DiameterMm ?? 8) / 2) * scale);
                 using var paint = new SKPaint
                 {
-                    Color = active ? new SKColor(0xFF, 0xC1, 0x07) : new SKColor(0x00, 0x44, 0xFF),
+                    Color = Color(0x00, 0x44, 0xFF),
                     IsStroke = true,
-                    StrokeWidth = active ? 4 : 2,
+                    StrokeWidth = active ? 4 : focused ? 2 : 1,
                     IsAntialias = true,
                 };
                 canvas.DrawCircle(cx, cy, r, paint);
                 canvas.DrawLine(cx - r, cy, cx + r, cy, paint);
                 canvas.DrawLine(cx, cy - r, cx, cy + r, paint);
+            }
+            else if (op.Op == "pocket")
+            {
+                using var paint = new SKPaint
+                {
+                    Color = Color(0x2E, 0xA8, 0x4A),
+                    IsStroke = true,
+                    StrokeWidth = active ? 3f : focused ? 1.6f : 1f,
+                    IsAntialias = true,
+                };
+                var segments = op.PathSegments;
+                if (segments is { Count: > 0 })
+                {
+                    foreach (var seg in segments)
+                    {
+                        if (seg.Count < 2) continue;
+                        using var sk = new SKPath();
+                        for (var i = 0; i < seg.Count; i++)
+                        {
+                            var sx = toSx(seg[i].X);
+                            var sy = toSy(seg[i].Y);
+                            if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                        }
+                        canvas.DrawPath(sk, paint);
+                    }
+                }
+                else if (op.Path is { Count: >= 2 } ppath)
+                {
+                    using var sk = new SKPath();
+                    for (var i = 0; i < ppath.Count; i++)
+                    {
+                        var sx = toSx(ppath[i].X);
+                        var sy = toSy(ppath[i].Y);
+                        if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                    }
+                    canvas.DrawPath(sk, paint);
+                }
+                if (op.FinishLoop is { Count: >= 3 } loop)
+                {
+                    using var sk = new SKPath();
+                    for (var i = 0; i < loop.Count; i++)
+                    {
+                        var sx = toSx(loop[i].X);
+                        var sy = toSy(loop[i].Y);
+                        if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                    }
+                    sk.Close();
+                    using var finish = new SKPaint
+                    {
+                        Color = Color(0x1E, 0x6E, 0x32),
+                        IsStroke = true,
+                        StrokeWidth = focused ? 2f : 1f,
+                        IsAntialias = true,
+                        PathEffect = SKPathEffect.CreateDash([4, 3], 0),
+                    };
+                    canvas.DrawPath(sk, finish);
+                }
             }
             else if (op.Op == "groove" && op.Path is { Count: >= 2 } gpath)
             {
@@ -543,11 +738,14 @@ static class CanvasPainter
                         if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
                     }
                 }
+                var grooveColor = op.IsTongue
+                    ? Color(0xE6, 0x7E, 0x22)
+                    : Color(0x2E, 0xA8, 0x4A);
                 using var paint = new SKPaint
                 {
-                    Color = active ? new SKColor(0xFF, 0xC1, 0x07) : new SKColor(0xEE, 0x66, 0x00),
+                    Color = grooveColor,
                     IsStroke = true,
-                    StrokeWidth = active ? 3f : 1.8f,
+                    StrokeWidth = active ? 3f : focused ? 1.8f : 1f,
                     IsAntialias = true,
                 };
                 canvas.DrawPath(sk, paint);
@@ -572,6 +770,110 @@ static class CanvasPainter
             };
             canvas.DrawCircle(cx, cy, 5, marker);
             canvas.DrawCircle(cx, cy, 5, ring);
+        }
+    }
+
+    static void PaintBridges(
+        SKCanvas canvas,
+        IReadOnlyList<ProfileBridge> bridges,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        float scale,
+        int sheetIndex)
+    {
+        foreach (var b in bridges.Where(x => x.SheetIndex == sheetIndex))
+        {
+            var sx = toSx(b.X);
+            var sy = toSy(b.Y);
+            var r = Math.Max(5.5f, 2.2f * Math.Max(1f, scale));
+            using var fill = new SKPaint
+            {
+                Color = b.PairId is null
+                    ? new SKColor(0xF1, 0xC4, 0x0F)
+                    : new SKColor(0xE6, 0x7E, 0x22),
+                IsAntialias = true,
+            };
+            using var stroke = new SKPaint
+            {
+                Color = new SKColor(0x4A, 0x2C, 0x0A),
+                IsStroke = true,
+                StrokeWidth = 1.4f,
+                IsAntialias = true,
+                StrokeJoin = SKStrokeJoin.Round,
+            };
+            using var diamond = new SKPath();
+            diamond.MoveTo(sx, sy - r);
+            diamond.LineTo(sx + r, sy);
+            diamond.LineTo(sx, sy + r);
+            diamond.LineTo(sx - r, sy);
+            diamond.Close();
+            canvas.DrawPath(diamond, fill);
+            canvas.DrawPath(diamond, stroke);
+        }
+    }
+
+    static void DrawHoldPreview(
+        SKCanvas canvas,
+        Panel panel,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        float pad,
+        float scale,
+        float sheetH,
+        double ox,
+        double oy,
+        double rotDeg,
+        bool blocked,
+        bool showDims)
+    {
+        var place = new NestPlacementMsg
+        {
+            OffsetX = ox,
+            OffsetY = oy,
+            RotationDeg = rotDeg,
+        };
+        using var path = BuildWorldPath(panel, place, pad, scale, sheetH);
+        var fillC = blocked
+            ? new SKColor(0xCC, 0x33, 0x33, 0x55)
+            : new SKColor(0x00, 0x66, 0xCC, 0x55);
+        var strokeC = blocked
+            ? new SKColor(0xCC, 0x22, 0x22)
+            : new SKColor(0x00, 0x66, 0xCC);
+        using var fill = new SKPaint { Color = fillC, IsAntialias = true };
+        using var stroke = new SKPaint
+        {
+            Color = strokeC,
+            IsStroke = true,
+            StrokeWidth = 2f,
+            IsAntialias = true,
+            PathEffect = SKPathEffect.CreateDash([7f, 5f], 0),
+        };
+        canvas.DrawPath(path, fill);
+        canvas.DrawPath(path, stroke);
+
+        if (showDims)
+        {
+            var aabb = NestDrag.Aabb(panel, ox, oy, rotDeg);
+            DrawDimHScreen(canvas, toSx(aabb.MinX), toSx(aabb.MaxX), toSy(aabb.MinY) + 12, Fmt(aabb.MaxX - aabb.MinX));
+            DrawDimVScreen(canvas, toSy(aabb.MinY), toSy(aabb.MaxY), toSx(aabb.MaxX) + 10, Fmt(aabb.MaxY - aabb.MinY));
+        }
+
+        var bounds = NestTransform.BoundsOf(panel);
+        foreach (var f in panel.Features)
+        {
+            if (!PanelEdit.IsHole(f)) continue;
+            var (wx, wy) = NestTransform.ToSheet(
+                f.X, f.Y, bounds, ox, oy, rotDeg);
+            var r = Math.Max(1.5f, (float)((f.DiameterMm ?? 8) / 2) * scale);
+            using var hp = new SKPaint
+            {
+                Color = strokeC,
+                IsStroke = true,
+                StrokeWidth = 1.2f,
+                IsAntialias = true,
+                PathEffect = SKPathEffect.CreateDash([4f, 3f], 0),
+            };
+            canvas.DrawCircle(toSx(wx), toSy(wy), r, hp);
         }
     }
 
@@ -723,6 +1025,115 @@ static class CanvasPainter
         canvas.DrawPath(gpath, gStroke);
     }
 
+    static void DrawMeasureGuide(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        (double X, double Y) from,
+        (double X, double Y) to) =>
+        DrawDistanceOverlay(
+            canvas, toSx, toSy, from, to,
+            color: new SKColor(0xC4, 0x5A, 0x00),
+            hideIfTiny: false);
+
+    static void DrawDragGuide(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        (double X, double Y) from,
+        (double X, double Y) to) =>
+        DrawDistanceOverlay(
+            canvas, toSx, toSy, from, to,
+            color: new SKColor(0x00, 0x66, 0xCC),
+            hideIfTiny: true);
+
+    static void DrawDistanceOverlay(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        (double X, double Y) from,
+        (double X, double Y) to,
+        SKColor color,
+        bool hideIfTiny)
+    {
+        var dist = Math.Sqrt((to.X - from.X) * (to.X - from.X) + (to.Y - from.Y) * (to.Y - from.Y));
+        if (hideIfTiny && dist < 0.05) return;
+
+        var x0 = toSx(from.X);
+        var y0 = toSy(from.Y);
+        var x1 = toSx(to.X);
+        var y1 = toSy(to.Y);
+
+        using (var line = new SKPaint
+        {
+            Color = color,
+            IsStroke = true,
+            StrokeWidth = 1.6f,
+            IsAntialias = true,
+            PathEffect = SKPathEffect.CreateDash([8f, 5f], 0),
+            StrokeCap = SKStrokeCap.Round,
+        })
+            canvas.DrawLine(x0, y0, x1, y1, line);
+
+        using var dot = new SKPaint { Color = color, IsAntialias = true };
+        canvas.DrawCircle(x0, y0, 3.5f, dot);
+        canvas.DrawCircle(x1, y1, 3.5f, dot);
+
+        var label = Fmt(dist) + " mm";
+        var mx = (x0 + x1) * 0.5f;
+        var my = (y0 + y1) * 0.5f;
+        var dx = x1 - x0;
+        var dy = y1 - y0;
+        var len = MathF.Sqrt(dx * dx + dy * dy);
+        // Offset perpendicular so the number sits beside the midpoint, not on the line.
+        var ox = len > 1 ? -dy / len * 14f : 0;
+        var oy = len > 1 ? dx / len * 14f : -14f;
+        if (oy > 0) { ox = -ox; oy = -oy; }
+
+        using var font = new SKFont(UiTypeface(bold: true), 12);
+        var tw = font.MeasureText(label);
+        var tx = mx + ox - tw * 0.5f;
+        var ty = my + oy + 4;
+        using (var bg = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0xE6), IsAntialias = true })
+            canvas.DrawRoundRect(tx - 4, ty - 13, tw + 8, 18, 3, 3, bg);
+        using var paint = new SKPaint { Color = color, IsAntialias = true };
+        canvas.DrawText(label, tx, ty, SKTextAlign.Left, font, paint);
+    }
+
+    static void DrawSelectionBox(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        (double X0, double Y0, double X1, double Y1) box,
+        bool crossing)
+    {
+        var x0 = toSx(Math.Min(box.X0, box.X1));
+        var y0 = toSy(Math.Max(box.Y0, box.Y1));
+        var x1 = toSx(Math.Max(box.X0, box.X1));
+        var y1 = toSy(Math.Min(box.Y0, box.Y1));
+        var w = x1 - x0;
+        var h = y1 - y0;
+        if (w < 1 && h < 1) return;
+
+        var fill = crossing
+            ? new SKColor(0x22, 0xAA, 0x44, 0x28)
+            : new SKColor(0x00, 0x66, 0xCC, 0x28);
+        var stroke = crossing
+            ? new SKColor(0x1B, 0x8A, 0x38)
+            : new SKColor(0x00, 0x66, 0xCC);
+        using var fillPaint = new SKPaint { Color = fill, IsAntialias = true };
+        using var strokePaint = new SKPaint
+        {
+            Color = stroke,
+            IsStroke = true,
+            StrokeWidth = 1.4f,
+            IsAntialias = true,
+            PathEffect = crossing ? SKPathEffect.CreateDash([7f, 5f], 0) : null,
+        };
+        canvas.DrawRect(x0, y0, w, h, fillPaint);
+        canvas.DrawRect(x0, y0, w, h, strokePaint);
+    }
+
     static void DrawHandle(SKCanvas canvas, float x, float y, SKColor color)
     {
         using var fill = new SKPaint { Color = color, IsAntialias = true };
@@ -771,10 +1182,46 @@ static class CanvasPainter
         DrawText(canvas, label, x + 4, (b0 + b1) / 2, 11, new SKColor(0x33, 0x33, 0x33));
     }
 
+    static SKTypeface? _uiTypeface;
+    static SKTypeface? _uiTypefaceBold;
+
+    /// <summary>
+    /// Segoe UI has no CJK glyphs (shows tofu □). Prefer YaHei / UI fonts that cover Chinese.
+    /// </summary>
+    static SKTypeface UiTypeface(bool bold)
+    {
+        if (bold)
+            return _uiTypefaceBold ??= ResolveUiTypeface(bold: true);
+        return _uiTypeface ??= ResolveUiTypeface(bold: false);
+    }
+
+    static SKTypeface ResolveUiTypeface(bool bold)
+    {
+        var style = bold ? SKFontStyle.Bold : SKFontStyle.Normal;
+        foreach (var family in new[]
+                 {
+                     "Microsoft YaHei UI",
+                     "Microsoft YaHei",
+                     "微软雅黑",
+                     "Noto Sans CJK SC",
+                     "Source Han Sans SC",
+                     "Segoe UI",
+                 })
+        {
+            var tf = SKTypeface.FromFamilyName(family, style);
+            if (tf is null) continue;
+            // Accept only if it can draw a common CJK ideograph (avoid silent tofu).
+            if (tf.ContainsGlyph('板') || family is "Segoe UI")
+                return tf;
+            tf.Dispose();
+        }
+        return SKTypeface.Default;
+    }
+
     static void DrawText(SKCanvas canvas, string text, float x, float y, float size, SKColor color, bool bold = false)
     {
         using var paint = new SKPaint { Color = color, IsAntialias = true };
-        using var font = new SKFont(SKTypeface.FromFamilyName("Segoe UI", bold ? SKFontStyle.Bold : SKFontStyle.Normal), size);
+        using var font = new SKFont(UiTypeface(bold), size);
         canvas.DrawText(text, x, y, SKTextAlign.Left, font, paint);
     }
 
@@ -782,9 +1229,7 @@ static class CanvasPainter
     static string EllipsizeToWidth(string text, float maxWidthPx, float fontSize, bool bold)
     {
         if (string.IsNullOrEmpty(text) || maxWidthPx <= 8) return "";
-        using var font = new SKFont(
-            SKTypeface.FromFamilyName("Segoe UI", bold ? SKFontStyle.Bold : SKFontStyle.Normal),
-            fontSize);
+        using var font = new SKFont(UiTypeface(bold), fontSize);
         if (font.MeasureText(text) <= maxWidthPx) return text;
         const string ellipsis = "…";
         var lo = 0;
@@ -810,7 +1255,7 @@ static class CanvasPainter
     static void DrawCentered(SKCanvas canvas, int w, int h, string text)
     {
         using var paint = new SKPaint { Color = new SKColor(0x88, 0x88, 0x88), IsAntialias = true };
-        using var font = new SKFont(SKTypeface.Default, 14);
+        using var font = new SKFont(UiTypeface(bold: false), 14);
         canvas.DrawText(text, w / 2f, h / 2f, SKTextAlign.Center, font, paint);
     }
 

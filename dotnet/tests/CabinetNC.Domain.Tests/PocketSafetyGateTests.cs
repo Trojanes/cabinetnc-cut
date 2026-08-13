@@ -95,7 +95,8 @@ public class PocketSafetyGateTests
         var pocket = Assert.Single(ops, o => o.Op == "pocket");
         Assert.Equal(6, pocket.DepthMm);
         Assert.False(pocket.PocketTooSmallForTool);
-        Assert.True(pocket.PathSegments is { Count: >= 2 });
+        Assert.True(pocket.PathSegments is { Count: >= 1 });
+        Assert.NotNull(pocket.FinishLoop);
 
         var report = NcPreflight.Check(
             ops,

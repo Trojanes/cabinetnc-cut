@@ -20,7 +20,7 @@ public class ToolBinderTests
             new PanelFeature
             {
                 FeatureId = "H1", Kind = "holeVertical",
-                X = 20, Y = 20, DiameterMm = 5, DepthMm = 12,
+                X = 20, Y = 20, DiameterMm = 3, DepthMm = 12,
             },
             new PanelFeature
             {
@@ -35,9 +35,9 @@ public class ToolBinderTests
     public void FeaturesToOps_assigns_tool_ids()
     {
         var ops = OpsPlanner.FeaturesToOps([PanelWithHole()]);
-        Assert.Contains(ops, o => o.Op == "contour" && o.ToolId == "T1");
+        Assert.Contains(ops, o => o.Op == "contour" && o.ToolId == "T2");
         Assert.Contains(ops, o => o.Op == "drill" && o.ToolId == "T3");
-        Assert.Contains(ops, o => o.Op == "groove" && o.ToolId == "T2");
+        Assert.Contains(ops, o => o.Op == "groove" && o.ToolId == "T1");
         Assert.Empty(ToolBinder.MissingToolIds(ops));
     }
 

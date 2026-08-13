@@ -1,4 +1,4 @@
-﻿# Run CabinetNC Cut (local)
+# Run CabinetNC Cut (local)
 
 Path: `C:\Users\yino\Projects\cabinetnc-cut`
 
@@ -12,11 +12,12 @@ Open http://localhost:5177/
 
 ## .NET Desktop (WPF)
 Requires .NET 10 SDK (already installed).
+Desktop shortcut **CabinetNC Cut** opens `dist\CabinetNC-Cut\` (the only runnable copy).
 ```powershell
-cd C:\Users\yino\Projects\cabinetnc-cut\dotnet
-dotnet run --project src\CabinetNC.Desktop -c Release
+cd E:\Work\cabinetnc-cut\dotnet
+dotnet build src\CabinetNC.Desktop -c Release
 ```
-Or start: `dotnet\src\CabinetNC.Desktop\bin\Release\net10.0-windows\CabinetNC.Desktop.exe`
+Then start from the desktop icon, or `dist\CabinetNC-Cut\Start-CabinetNC-Cut.cmd`.
 
 ## Portable web shell
 Unzip `CabinetNC-Cut-v0.1.0-portable.zip` and double-click `start.bat` (needs Node).

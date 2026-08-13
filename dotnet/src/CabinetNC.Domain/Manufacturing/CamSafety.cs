@@ -4,7 +4,7 @@ using CabinetNC.Domain.Parts;
 
 /// <summary>
 /// Day 8 shop-safe CAM ordering and depths.
-/// Order: Drill → Pocket → Groove → Inner Contour → Outer Profile.
+/// Order: Drill → Tongue → Clearance → Inner Profile → Outer Profile.
 /// ASSUMED ThroughAllowanceMm=0.5, SpoilboardAllowMm=1.0.
 /// </summary>
 public static class CamSafety
@@ -14,15 +14,13 @@ public static class CamSafety
 
     public static int SequenceRank(CutOp op)
     {
-        return op.Op.ToLowerInvariant() switch
-        {
-            "drill" => 0,
-            "pocket" => 1,
-            "groove" => 2,
-            "contour" when !string.IsNullOrWhiteSpace(op.FeatureId) => 3, // inner
-            "contour" => 4, // outer
-            _ => 9,
-        };
+        var kind = op.Op.ToLowerInvariant();
+        if (kind == "drill") return 0;
+        if (kind == "groove" && op.IsTongue) return 1;
+        if (kind is "pocket" or "groove") return 2;
+        if (kind == "contour" && !string.IsNullOrWhiteSpace(op.FeatureId)) return 3;
+        if (kind == "contour") return 4;
+        return 9;
     }
 
     public static IOrderedEnumerable<CutOp> OrderSafe(IEnumerable<CutOp> ops) =>
@@ -44,14 +42,15 @@ public static class CamSafety
             if (!panelsById.TryGetValue(op.PanelId, out var panel))
                 return op;
             var th = panel.ThicknessMm;
-            if (op.Op == "contour" && string.IsNullOrWhiteSpace(op.FeatureId))
-                return op with { DepthMm = OuterContourDepthMm(th) };
-            if (op.Op == "contour" && op.DepthMm is null or <= 0)
-                return op with { DepthMm = th }; // inner without depth → panel thickness
+            var stamped = op.ThicknessMm is > 0 ? op : op with { ThicknessMm = th };
+            if (stamped.Op == "contour" && string.IsNullOrWhiteSpace(stamped.FeatureId))
+                return stamped with { DepthMm = OuterContourDepthMm(th), Through = true };
+            if (stamped.Op == "contour" && stamped.DepthMm is null or <= 0)
+                return stamped with { DepthMm = th }; // inner without depth → panel thickness
             // Do NOT clamp over-deep grooves here — Preflight DepthIssues must see the raw illegal depth.
-            if (op.Op == "drill" && op.DepthMm is null or <= 0)
-                return op with { DepthMm = th };
-            return op;
+            if (stamped.Op == "drill" && stamped.DepthMm is null or <= 0)
+                return stamped with { DepthMm = th };
+            return stamped;
         }).ToList();
     }
 

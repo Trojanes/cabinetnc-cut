@@ -541,6 +541,13 @@ public static class ManufacturingSnapshotImporter
                     return null;
                 }
             }
+            // Restore stadium when tagged as lock OR CAD reported arc edges.
+            // Size alone must not round a genuine sharp through hole.
+            ring = LockSlotGeometry.EnsureStadium(
+                ring,
+                feature.Intent?.Purpose,
+                feature.Intent?.OperationType,
+                feature.HasArc).ToList();
             featurePath = ring;
             profile = ring;
             x = ring[0].X;

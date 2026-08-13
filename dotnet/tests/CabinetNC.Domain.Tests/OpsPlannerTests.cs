@@ -25,7 +25,7 @@ public class OpsPlannerTests
                     Kind = "holeVertical",
                     X = 20,
                     Y = 20,
-                    DiameterMm = 8,
+                    DiameterMm = 3,
                     DepthMm = 12,
                 },
             ],
@@ -42,5 +42,28 @@ public class OpsPlannerTests
         Assert.True(drill.Placed);
         Assert.Equal(30, drill.SheetX);
         Assert.Equal(25, drill.SheetY);
+    }
+
+    [Fact]
+    public void AttachToNest_keeps_four_decimal_sheet_coords()
+    {
+        var ops = new[]
+        {
+            new CutOp
+            {
+                Op = "drill",
+                PanelId = "P1",
+                FeatureId = "H1",
+                Placed = false,
+                X = 10.12346,
+                Y = 20.56789,
+            },
+        };
+        var placed = OpsPlanner.AttachToNest(ops, [
+            new NestPlacement { PanelId = "P1", SheetIndex = 0, OffsetX = 0.11111, OffsetY = 0.22222 },
+        ]);
+        var drill = Assert.Single(placed);
+        Assert.Equal(10.2346, drill.SheetX);
+        Assert.Equal(20.7901, drill.SheetY);
     }
 }

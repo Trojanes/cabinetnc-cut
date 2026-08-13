@@ -179,4 +179,128 @@ public class PartsInPartPackerTests
         Assert.Equal(1, packed.SheetCount);
         Assert.Equal(2, packed.Placements.Count);
     }
+
+    [Fact]
+    public void TryUsableVoid_matches_cutout_inset_by_clearance()
+    {
+        var host = HostWithCutout("HOST", 400, 300, 90, 60, 310, 240);
+        var place = new NestPlacement
+        {
+            PanelId = "HOST",
+            SheetIndex = 0,
+            OffsetX = 15,
+            OffsetY = 20,
+            RotationDeg = 0,
+        };
+        Assert.True(PartsInPartPacker.TryUsableVoid(
+            host, place.OffsetX, place.OffsetY, place.RotationDeg, "CUT1", 8,
+            out var x, out var y, out var w, out var h));
+        Assert.Equal(15 + 90 + 8, x, 6);
+        Assert.Equal(20 + 60 + 8, y, 6);
+        Assert.Equal(310 - 90 - 16, w, 6);
+        Assert.Equal(240 - 60 - 16, h, 6);
+    }
+
+    [Fact]
+    public void CenterInVoids_moves_corner_child_to_void_center()
+    {
+        var host = HostWithCutout("HOST", 400, 300, 90, 60, 310, 240);
+        var child = Rect("CHILD", 80, 60);
+        var byPanel = new Dictionary<string, Panel> { ["HOST"] = host, ["CHILD"] = child };
+        var work = new List<NestPlacement>
+        {
+            new() { PanelId = "HOST", SheetIndex = 0, OffsetX = 15, OffsetY = 20, RotationDeg = 0 },
+            new() { PanelId = "CHILD", SheetIndex = 0, OffsetX = 15 + 90 + 8, OffsetY = 20 + 60 + 8, RotationDeg = 0 },
+        };
+        var slots = new[]
+        {
+            new PartInPartSlot
+            {
+                HostPanelId = "HOST",
+                ChildPanelId = "CHILD",
+                FeatureId = "CUT1",
+                SheetIndex = 0,
+                Enabled = true,
+            },
+        };
+
+        var moved = PartsInPartPacker.CenterInVoids(work, byPanel, slots, 0, clearanceMm: 8);
+        Assert.Equal(1, moved);
+
+        Assert.True(PartsInPartPacker.TryUsableVoid(
+            host, 15, 20, 0, "CUT1", 8, out var vx, out var vy, out var vw, out var vh));
+        var childPlace = work.Single(p => p.PanelId == "CHILD");
+        Assert.Equal(vx + (vw - 80) / 2, childPlace.OffsetX, 6);
+        Assert.Equal(vy + (vh - 60) / 2, childPlace.OffsetY, 6);
+        Assert.Equal(15, work.Single(p => p.PanelId == "HOST").OffsetX, 6);
+    }
+
+    [Fact]
+    public void CenterInVoids_keeps_relative_gap_of_two_children()
+    {
+        var host = HostWithCutout("HOST", 400, 300, 40, 30, 360, 270);
+        var a = Rect("A", 80, 60);
+        var b = Rect("B", 50, 40);
+        var byPanel = new Dictionary<string, Panel> { ["HOST"] = host, ["A"] = a, ["B"] = b };
+        const double gap = 8;
+        var ax = 15 + 40 + 8;
+        var ay = 20 + 30 + 8;
+        var work = new List<NestPlacement>
+        {
+            new() { PanelId = "HOST", SheetIndex = 0, OffsetX = 15, OffsetY = 20, RotationDeg = 0 },
+            new() { PanelId = "A", SheetIndex = 0, OffsetX = ax, OffsetY = ay, RotationDeg = 0 },
+            new() { PanelId = "B", SheetIndex = 0, OffsetX = ax + 80 + gap, OffsetY = ay, RotationDeg = 0 },
+        };
+        var slots = new[]
+        {
+            new PartInPartSlot { HostPanelId = "HOST", ChildPanelId = "A", FeatureId = "CUT1", SheetIndex = 0 },
+            new PartInPartSlot { HostPanelId = "HOST", ChildPanelId = "B", FeatureId = "CUT1", SheetIndex = 0 },
+        };
+
+        var moved = PartsInPartPacker.CenterInVoids(work, byPanel, slots, 0, clearanceMm: 8);
+        Assert.Equal(2, moved);
+
+        var pa = work.Single(p => p.PanelId == "A");
+        var pb = work.Single(p => p.PanelId == "B");
+        Assert.Equal(80 + gap, pb.OffsetX - pa.OffsetX, 6);
+        Assert.Equal(0, pb.OffsetY - pa.OffsetY, 6);
+
+        Assert.True(PartsInPartPacker.TryUsableVoid(
+            host, 15, 20, 0, "CUT1", 8, out var vx, out var vy, out var vw, out var vh));
+        var clusterW = 80 + gap + 50;
+        var clusterH = 60;
+        Assert.Equal(vx + (vw - clusterW) / 2, pa.OffsetX, 6);
+        Assert.Equal(vy + (vh - clusterH) / 2, pa.OffsetY, 6);
+    }
+
+    [Fact]
+    public void CenterInVoids_skips_locked_child()
+    {
+        var host = HostWithCutout("HOST", 400, 300, 90, 60, 310, 240);
+        var child = Rect("CHILD", 80, 60);
+        var byPanel = new Dictionary<string, Panel> { ["HOST"] = host, ["CHILD"] = child };
+        var ox = 15 + 90 + 8;
+        var oy = 20 + 60 + 8;
+        var work = new List<NestPlacement>
+        {
+            new() { PanelId = "HOST", SheetIndex = 0, OffsetX = 15, OffsetY = 20, RotationDeg = 0 },
+            new() { PanelId = "CHILD", SheetIndex = 0, OffsetX = ox, OffsetY = oy, RotationDeg = 0 },
+        };
+        var slots = new[]
+        {
+            new PartInPartSlot
+            {
+                HostPanelId = "HOST",
+                ChildPanelId = "CHILD",
+                FeatureId = "CUT1",
+                SheetIndex = 0,
+            },
+        };
+        var locked = new HashSet<string>(StringComparer.Ordinal) { "CHILD" };
+
+        var moved = PartsInPartPacker.CenterInVoids(work, byPanel, slots, 0, 8, locked);
+        Assert.Equal(0, moved);
+        Assert.Equal(ox, work.Single(p => p.PanelId == "CHILD").OffsetX, 6);
+        Assert.Equal(oy, work.Single(p => p.PanelId == "CHILD").OffsetY, 6);
+    }
 }

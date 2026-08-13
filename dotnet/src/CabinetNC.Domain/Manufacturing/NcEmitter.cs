@@ -3,12 +3,13 @@ namespace CabinetNC.Domain.Manufacturing;
 using CabinetNC.Domain.Machines;
 
 /// <summary>Port of src/nc.js opsToNc (G0/G1/F/S — no arcs).</summary>
-public static class NcEmitter
+public static partial class NcEmitter
 {
     public static string OpsToNc(
         IEnumerable<CutOp> ops,
         MachineProfile profile,
-        IReadOnlyDictionary<string, ToolDefinition>? tools = null)
+        IReadOnlyDictionary<string, ToolDefinition>? tools = null,
+        PostRecipe? recipe = null)
     {
         var catalog = tools ?? ToolCatalog.DefaultMap();
         var safeZ = profile.SafeZMm;
@@ -19,6 +20,8 @@ public static class NcEmitter
         if (!profile.EnableContour) list = list.Where(o => o.Op is not ("contour" or "pocket")).ToList();
         if (!profile.EnableDrill) list = list.Where(o => o.Op != "drill").ToList();
         if (!profile.EnableGroove) list = list.Where(o => o.Op != "groove").ToList();
+        if (recipe is not null)
+            return EmitTroy(list, profile, recipe, catalog);
 
         var contours = list.Where(o => o.Op == "contour" && o.Path is { Count: >= 3 }).ToList();
         var pockets = list.Where(o => o.Op == "pocket" && (
@@ -37,7 +40,7 @@ public static class NcEmitter
         {
             $"(cabinetnc-cut nc · {profile.Id} · {profile.Name} · {profile.Dialect})",
             "(wcs: sheet SW origin · X+ right · Y+ back · Z+ up · units mm)",
-            $"(cam safety: drill→pocket→groove→inner→outer · through+{CamSafety.ThroughAllowanceMm})",
+            $"(cam safety: drill→tongue→clearance→profile · through+{CamSafety.ThroughAllowanceMm})",
         };
         if (!string.IsNullOrWhiteSpace(profile.OriginNote))
             lines.Add($"(origin: {profile.OriginNote.Replace("(", "").Replace(")", "")})");
@@ -141,7 +144,7 @@ public static class NcEmitter
 
     /// <summary>
     /// Pocket: each scan segment is plunge→cut; G0 between segments (no cross-area G1).
-    /// Finish loop is a separate closed contour; zigzag is never closed back to path[0].
+    /// Finish loop is a separate closed contour; the fill (spiral) is never closed back to path[0].
     /// </summary>
     static void EmitPocket(List<string> lines, CutOp c, MachineProfile profile, double feed, double feedZ)
     {

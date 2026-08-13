@@ -26,6 +26,55 @@
       <Setter Property="Foreground" Value="#666666" />
       <Setter Property="Margin" Value="0,10,0,4" />
     </Style>
+    <Style x:Key="OpsIconBtn" TargetType="ToggleButton">
+      <Setter Property="Width" Value="72" />
+      <Setter Property="Height" Value="78" />
+      <Setter Property="Margin" Value="0,0,0,8" />
+      <Setter Property="Padding" Value="4,6" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#C8C8C8" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Style.Triggers>
+        <Trigger Property="IsChecked" Value="True">
+          <Setter Property="Background" Value="#1A3A5C" />
+          <Setter Property="BorderBrush" Value="#1A3A5C" />
+          <Setter Property="Foreground" Value="#FFFFFF" />
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="OpsRailCalcBtn" TargetType="Button">
+      <Setter Property="Margin" Value="0,0,0,6" />
+      <Setter Property="Padding" Value="4,8" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style x:Key="ProfModeBtn" TargetType="Button">
+      <Setter Property="Padding" Value="8,7" />
+      <Setter Property="Margin" Value="0,0,0,6" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#AAAAAA" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}"
+                    CornerRadius="2">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <Style x:Key="ModuleBtn" TargetType="Button">
       <Setter Property="Padding" Value="8,12" />
       <Setter Property="Margin" Value="0,0,0,4" />
@@ -57,14 +106,18 @@
 
     <Border DockPanel.Dock="Bottom" Padding="12,7" Background="#E8E8E8" BorderBrush="#C8C8C8" BorderThickness="0,1,0,0">
       <Grid>
-        <DockPanel Margin="0,0,220,0" LastChildFill="True">
-          <ProgressBar x:Name="NestProgress" DockPanel.Dock="Left" Width="140" Height="10"
-                       Margin="0,0,10,0" Minimum="0" Maximum="100" Value="0"
-                       Visibility="Collapsed" VerticalAlignment="Center" />
-          <TextBlock x:Name="StatusText" Text="Ready" VerticalAlignment="Center"
-                     TextTrimming="CharacterEllipsis" FontSize="12" />
-        </DockPanel>
-        <TextBlock x:Name="WorkerBadge" Text="Worker: —" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" FontSize="12" />
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock x:Name="StatusText" Grid.Column="0" Text="Ready" VerticalAlignment="Center"
+                   TextTrimming="CharacterEllipsis" FontSize="12" Margin="0,0,12,0" />
+        <ProgressBar x:Name="NestProgress" Grid.Column="1" Width="140" Height="10"
+                     Margin="0,0,12,0" Minimum="0" Maximum="100" Value="0"
+                     Visibility="Collapsed" VerticalAlignment="Center" />
+        <TextBlock x:Name="WorkerBadge" Grid.Column="2" Text="Worker: —"
+                   VerticalAlignment="Center" FontWeight="SemiBold" FontSize="12" />
       </Grid>
     </Border>
 
@@ -138,7 +191,8 @@
               </TabControl>
               <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
                 <StackPanel x:Name="WfDots" Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center" />
-                <Button x:Name="OneClickExportBtn" Content="一键导出" Click="OnOneClickExportClick" IsEnabled="False" Padding="12,6" />
+                <Button x:Name="OneClickExportBtn" Content="一键导出" Click="OnOneClickExportClick" IsEnabled="False"
+                        Padding="12,6" Visibility="Collapsed" />
               </StackPanel>
             </Grid>
           </Border>
@@ -156,12 +210,12 @@
 
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="200" />
+              <ColumnDefinition x:Name="LeftCol" Width="200" />
               <ColumnDefinition Width="*" />
               <ColumnDefinition x:Name="NcCol" Width="300" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="#F7F7F7" BorderBrush="#C8C8C8" BorderThickness="0,0,1,0" Padding="8">
+            <Border x:Name="LeftRail" Grid.Column="0" Background="#F7F7F7" BorderBrush="#C8C8C8" BorderThickness="0,0,1,0" Padding="8">
               <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel x:Name="LeftRailContent">
                   <TextBlock Text="工程" Style="{StaticResource RailH2}" Margin="0,0,0,4" />
@@ -223,10 +277,24 @@
               </ScrollViewer>
             </Border>
 
+            <Border x:Name="OutGcodePane" Grid.Column="0" Background="#1E1E1E" BorderBrush="#C8C8C8"
+                    BorderThickness="0,0,1,0" Visibility="Collapsed">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="G-code" Foreground="#CFCFCF" FontWeight="SemiBold"
+                           Margin="12,10,12,6" />
+                <TextBox x:Name="NcPreview" IsReadOnly="True" AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" FontSize="12"
+                         Background="#1E1E1E" Foreground="#D4D4D4" BorderThickness="0" Padding="10,4,10,10" />
+              </DockPanel>
+            </Border>
+
             <Border x:Name="CanvasPane" Grid.Column="1" Background="White"
                     PreviewMouseLeftButtonDown="OnCanvasDown"
                     PreviewMouseMove="OnCanvasMove"
                     PreviewMouseLeftButtonUp="OnCanvasUp"
+                    PreviewMouseRightButtonDown="OnCanvasRightDown"
+                    PreviewMouseRightButtonUp="OnCanvasRightUp"
                     LostMouseCapture="OnCanvasLostCapture">
               <Grid>
                 <skia:SKElement x:Name="CanvasHost" PaintSurface="OnPaintSurface" />
@@ -247,11 +315,15 @@
                       <TextBlock Text="选中" Foreground="#0066CC" FontSize="11" Margin="0,0,10,0" />
                       <TextBlock Text="锁定" Foreground="#886600" FontSize="11" Margin="0,0,10,0" />
                       <TextBlock Text="冲突" Foreground="#CC2222" FontSize="11" Margin="0,0,10,0" />
+                      <TextBlock Text="Ctrl 多选" Foreground="#666" FontSize="11" Margin="0,0,10,0" />
                       <TextBlock Text="右侧=待用区" Foreground="#666" FontSize="11" Margin="0,0,10,0" />
                       <TextBlock Text="间距按板材种类" Foreground="#666" FontSize="11" />
                     </WrapPanel>
                   </Border>
                 </Grid>
+                <TextBlock x:Name="OutPreviewCaption" Visibility="Collapsed" IsHitTestVisible="False"
+                           HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12,10,12,0"
+                           FontSize="12" FontWeight="SemiBold" Foreground="#1A3A5C" />
                 <TextBlock x:Name="CanvasHint" Visibility="Collapsed" IsHitTestVisible="False"
                            HorizontalAlignment="Center" VerticalAlignment="Center"
                            FontSize="14" Foreground="#888" />
@@ -427,11 +499,12 @@
                 <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
                   <Button x:Name="NestApplyBtn" Content="重新密排" Click="OnApplyNestSettingsClick"
                           HorizontalAlignment="Stretch" Padding="10,8" FontWeight="SemiBold" Margin="0,0,0,6" />
+                  <Button x:Name="NestStabilizeBtn" Content="本张密排优化" Click="OnNestStabilizeClick"
+                          HorizontalAlignment="Stretch" Padding="8,6" Margin="0,0,0,4"
+                          ToolTip="二次整理当前大板：只把特别窄的条子（短边小于约 100mm）从宽度边缘整列调到中间。150mm 宽的竖条贴边没问题，不动。" />
                   <Button x:Name="NestGuillotineBtn" Content="本张余料线" Click="OnNestGuillotineClick"
                           HorizontalAlignment="Stretch" Padding="8,6" Margin="0,0,0,4"
                           ToolTip="按当前大板排版轮廓外 20mm 生成横/竖/L 余料分割线（预览）；余料边 &lt; 400mm 则跳过" />
-                  <Button x:Name="NestNcBtn" Content="生成加工档" Click="OnNestClick"
-                          HorizontalAlignment="Stretch" Padding="8,6" Margin="0,0,0,4" />
                   <Expander Header="高级" FontSize="12" Margin="0,4,0,0">
                     <StackPanel Margin="0,6,0,0">
                       <Button x:Name="NestVerifyPolyBtn" Content="多边形间距校验" Click="OnNestVerifyPolyClick"
@@ -499,41 +572,233 @@
               </DockPanel>
             </Border>
 
-            <Border x:Name="NcPane" Grid.Column="2" Background="#1E1E1E" BorderBrush="#C8C8C8" BorderThickness="1,0,0,0" Visibility="Collapsed">
+            <Border x:Name="OpsPane" Grid.Column="2" Background="#F7F7F7" BorderBrush="#C8C8C8"
+                    BorderThickness="1,0,0,0" Padding="0" Visibility="Collapsed">
               <DockPanel>
-                <StackPanel DockPanel.Dock="Top" Margin="10,8,10,4">
-                  <TextBlock x:Name="NcPaneTitle" Text="刀路 / NC" Foreground="#CFCFCF" FontWeight="SemiBold" />
-                  <TextBlock x:Name="OpsMeta" Text="" Foreground="#888" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap" />
-                  <ListBox x:Name="OpsListBox" Height="90" Margin="0,6,0,0" FontSize="11"
-                           Background="#252526" Foreground="#CCCCCC" BorderThickness="0" Visibility="Collapsed" />
-                  <StackPanel x:Name="CamSimPanel" Visibility="Collapsed" Margin="0,6,0,0">
-                    <StackPanel Orientation="Horizontal">
-                      <Button Content="◀" Click="OnCamPrevClick" Padding="7,3" />
-                      <Button x:Name="CamPlayBtn" Content="播放" Click="OnCamPlayClick" Padding="7,3" />
-                      <Button Content="▶" Click="OnCamNextClick" Padding="7,3" />
+                <!-- Far-right icon rail: machine, 3 toolpaths, calculate -->
+                <Border DockPanel.Dock="Right" Width="88" Background="#EEEEEE"
+                        BorderBrush="#C8C8C8" BorderThickness="1,0,0,0" Padding="8,10,8,10">
+                  <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                      <TextBlock Text="机型" FontSize="10" Foreground="#555" HorizontalAlignment="Center"
+                                 Margin="0,0,0,4" />
+                      <ComboBox x:Name="OpsMachineCombo" DisplayMemberPath="Name" SelectedValuePath="Id"
+                                FontSize="10" Margin="0,0,0,12"
+                                SelectionChanged="OnOpsMachineChanged" />
+                      <ToggleButton x:Name="OpsIconProfile" Style="{StaticResource OpsIconBtn}"
+                                    Tag="Profile" Click="OnOpsToolpathIconClick"
+                                    ToolTip="Profiling · 外形 / 开窗 / 半槽">
+                        <StackPanel HorizontalAlignment="Center">
+                          <Rectangle Width="34" Height="22" Stroke="#2277CC" StrokeThickness="2"
+                                     HorizontalAlignment="Center" Margin="0,0,0,4" />
+                          <TextBlock Text="Profiling" FontSize="9" HorizontalAlignment="Center"
+                                     TextAlignment="Center" TextWrapping="Wrap" />
+                          <TextBlock x:Name="OpsIconProfileCount" Text="" FontSize="9" Opacity="0.75"
+                                     HorizontalAlignment="Center" />
+                        </StackPanel>
+                      </ToggleButton>
+                      <ToggleButton x:Name="OpsIconClearance" Style="{StaticResource OpsIconBtn}"
+                                    Tag="AreaClearance" Click="OnOpsToolpathIconClick"
+                                    ToolTip="Area Clearance · 口袋 / 宽槽清底">
+                        <StackPanel HorizontalAlignment="Center">
+                          <Border Width="34" Height="22" Background="#3D9A5F" Opacity="0.85"
+                                  BorderBrush="#2E7A4A" BorderThickness="1" HorizontalAlignment="Center"
+                                  Margin="0,0,0,4" />
+                          <TextBlock Text="Area Clearance" FontSize="9" HorizontalAlignment="Center"
+                                     TextAlignment="Center" TextWrapping="Wrap" />
+                          <TextBlock x:Name="OpsIconClearanceCount" Text="" FontSize="9" Opacity="0.75"
+                                     HorizontalAlignment="Center" />
+                        </StackPanel>
+                      </ToggleButton>
+                      <ToggleButton x:Name="OpsIconDrill" Style="{StaticResource OpsIconBtn}"
+                                    Tag="Drilling" Click="OnOpsToolpathIconClick"
+                                    ToolTip="Drilling · 孔">
+                        <StackPanel HorizontalAlignment="Center">
+                          <Ellipse Width="16" Height="16" Stroke="#8B5A2B" StrokeThickness="2"
+                                   Fill="#D4A574" HorizontalAlignment="Center" Margin="0,0,0,4" />
+                          <TextBlock Text="Drilling" FontSize="9" HorizontalAlignment="Center" />
+                          <TextBlock x:Name="OpsIconDrillCount" Text="" FontSize="9" Opacity="0.75"
+                                     HorizontalAlignment="Center" />
+                        </StackPanel>
+                      </ToggleButton>
                     </StackPanel>
-                    <TextBlock x:Name="CamSimMeta" Foreground="#CCCCCC" FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
-                      <CheckBox x:Name="CamOffsetChk" Content="轮廓刀补" Foreground="#CCCCCC"
-                                Click="OnCamOffsetChanged" VerticalAlignment="Center" Margin="0,0,6,0" />
-                      <TextBox x:Name="CamOffsetBox" Text="3" Width="44" ToolTip="外偏 mm" />
-                      <TextBlock Text="mm" Foreground="#AAAAAA" VerticalAlignment="Center" Margin="3,0,0,0" />
+                    <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom">
+                      <CheckBox x:Name="OpsHomeXyChk" IsChecked="True" FontSize="10"
+                                Margin="0,0,0,8" Click="OnOpsHomeXyClick"
+                                ToolTip="程序结束先 G0 X0 Y0 再 G80。默认开。">
+                        <TextBlock Text="结束回原点" TextWrapping="Wrap" FontSize="10" />
+                      </CheckBox>
+                      <Button Style="{StaticResource OpsRailCalcBtn}" Click="OnOpsCalculateCurrentClick"
+                              ToolTip="只算当前大板，不重新密排">
+                        <TextBlock Text="计算当前板材" TextWrapping="Wrap" TextAlignment="Center" FontSize="11" />
+                      </Button>
+                      <Button Style="{StaticResource OpsRailCalcBtn}" Click="OnOpsCalculateAllClick"
+                              ToolTip="算全部大板，不重新密排">
+                        <TextBlock Text="计算全部" TextWrapping="Wrap" TextAlignment="Center" FontSize="11" />
+                      </Button>
                     </StackPanel>
+                    <TextBlock />
+                  </DockPanel>
+                </Border>
+
+                <!-- Params inspector: appears left of the icon rail when an icon is selected -->
+                <Border x:Name="OpsParamsPane" Width="300" Visibility="Collapsed"
+                        Background="#F7F7F7" Padding="10">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                      <TextBlock x:Name="OpsParamsTitle" Text="Profiling" Style="{StaticResource RailH2}" Margin="0,0,0,8" />
+
+                      <StackPanel x:Name="OpsParamsProfile">
+                        <TextBlock Text="半槽 T1" FontSize="12" FontWeight="SemiBold" Foreground="#1A3A5C" Margin="0,0,0,6" />
+                        <TextBlock Text="Feedrate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="TongueFeed" Text="9000" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged"
+                                 ToolTip="T1 半槽进给，可改。默认 9000。" />
+                        <TextBlock Text="转速 (rpm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="TongueRpm" Text="14500" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged" />
+                        <TextBlock Text="Plunge rate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="TonguePlunge" Text="1000" Margin="0,0,0,12" LostFocus="OnProfileFieldChanged" />
+
+                        <TextBlock Text="第一刀" FontSize="12" FontWeight="SemiBold" Foreground="#1A3A5C" Margin="0,0,0,6" />
+                        <TextBlock Text="刀" FontSize="10" Foreground="#666" />
+                        <ComboBox x:Name="ProfFirstTool" Margin="0,0,0,6" SelectionChanged="OnProfileToolChanged" />
+                        <TextBlock Text="Feedrate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfFirstFeed" Text="12000" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged" />
+                        <TextBlock Text="转速 (rpm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfFirstRpm" Text="14500" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged" />
+                        <TextBlock Text="Plunge rate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfFirstPlunge" Text="1000" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged" />
+                        <CheckBox x:Name="ProfFirstRamp45" Content="45° 斜下刀" IsChecked="False"
+                                  FontSize="12" Margin="0,0,0,6" Click="OnProfileFieldChanged" />
+                        <TextBlock Text="余料厚度 (mm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfFirstLeave" Text="0.5" Margin="0,0,0,12" LostFocus="OnProfileFieldChanged" />
+
+                        <TextBlock Text="第二刀" FontSize="12" FontWeight="SemiBold" Foreground="#1A3A5C" Margin="0,0,0,6" />
+                        <TextBlock Text="刀" FontSize="10" Foreground="#666" />
+                        <ComboBox x:Name="ProfLastTool" Margin="0,0,0,6" SelectionChanged="OnProfileToolChanged" />
+                        <TextBlock Text="Feedrate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfLastFeed" Text="20000" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged" />
+                        <TextBlock Text="转速 (rpm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfLastRpm" Text="14500" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged" />
+                        <TextBlock Text="Plunge rate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfLastPlunge" Text="1000" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged" />
+                        <TextBlock Text="下探深度 (mm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfLastThrough" Text="-0.55" Margin="0,0,0,12" LostFocus="OnProfileFieldChanged" />
+                        <TextBlock Text="桥" FontSize="12" FontWeight="SemiBold" Foreground="#1A3A5C" Margin="0,0,0,6" />
+                        <TextBlock Text="桥的宽度 (mm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfBridgeWidth" Text="5" Margin="0,0,0,8" LostFocus="OnProfileFieldChanged"
+                                 ToolTip="沿刀路跳过的长度，默认 5mm" />
+                        <TextBlock Text="三桥面积上限 (m²)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfBridgeTinyArea" Text="0.1" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged"
+                                 ToolTip="小于此面积的小板放 3 座桥，且在不同边" />
+                        <TextBlock Text="两桥 / 大板起点 (m²)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfBridgeLargeArea" Text="0.15" Margin="0,0,0,6" LostFocus="OnProfileFieldChanged"
+                                 ToolTip="介于两数之间放 2 座；大于此面积算大板，不主动布" />
+                        <TextBlock Text="条子长宽比" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ProfBridgeStripAspect" Text="12" Margin="0,0,0,8" LostFocus="OnProfileFieldChanged"
+                                 ToolTip="长/宽大于此值算长条。默认 12" />
+                        <Button x:Name="ProfBridgeManualBtn" Style="{StaticResource ProfModeBtn}"
+                                Content="手动模式" Click="OnProfBridgeManualClick"
+                                ToolTip="点外形刀路轨迹放桥；窄缝自动成对。再点退出" />
+                        <Button x:Name="ProfBridgeDeleteBtn" Style="{StaticResource ProfModeBtn}"
+                                Content="删除桥" Click="OnProfBridgeDeleteClick"
+                                ToolTip="点已有桥删除；成对一起去掉。与手动模式不能同时开" />
+                        <Button x:Name="ProfBridgeAutoBtn" Style="{StaticResource ProfModeBtn}"
+                                Content="自动计算" Click="OnProfBridgeAutoClick"
+                                ToolTip="当前大板：先小板长条，再纯长条，再补小板" />
+                        <Button x:Name="ProfBridgeAutoAllBtn" Style="{StaticResource ProfModeBtn}"
+                                Content="批量自动" Click="OnProfBridgeAutoAllClick"
+                                ToolTip="所有大板上每一块板都按自动规则布桥；缺刀路会先算全部" />
+                        <Button x:Name="ProfBridgeClearBtn" Style="{StaticResource ProfModeBtn}"
+                                Content="清空本页" Click="OnProfBridgeClearClick"
+                                ToolTip="去掉当前板所有桥，其它页保留" />
+                        <TextBlock x:Name="ProfBridgeCount" Text="" FontSize="10" Foreground="#666" Margin="0,2,0,0" />
+                      </StackPanel>
+                      <StackPanel x:Name="OpsParamsClearance" Visibility="Collapsed">
+                        <CheckBox x:Name="OpsClearanceChk" Content="清底 / 其它槽" IsChecked="True"
+                                  FontSize="12" Margin="0,0,0,8" Click="OnCamStrategyEnableClick" />
+                        <TextBlock Text="Feedrate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ClrFeed" Text="12000" Margin="0,0,0,6" LostFocus="OnClearanceFieldChanged" />
+                        <TextBlock Text="转速 (rpm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ClrRpm" Text="14500" Margin="0,0,0,6" LostFocus="OnClearanceFieldChanged" />
+                        <TextBlock Text="Plunge rate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ClrPlunge" Text="1000" Margin="0,0,0,12" LostFocus="OnClearanceFieldChanged" />
+                        <TextBlock Text="大刀最短边 (mm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="ClrLargeMinShort" Text="17" Margin="0,0,0,8"
+                                 LostFocus="OnClearanceThresholdChanged"
+                                 ToolTip="短边 ≥ 此值用 T2 Ø10；更窄且还能进 Ø6.35 用 T1。铰链孔 / 铰杯一律 T2。" />
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#666" Margin="0,0,0,8"
+                                   Text="按短边自动选刀，不选手动刀号。槽看槽宽，口袋看外接矩形短边。直径 &lt; 5 mm 的孔才钻孔；Ø5 及以上（含铰杯）走清底。铰杯一律 T2 Ø10。刀路默认螺旋由里向外。进给按清底 F12000，不跟半槽。" />
+                      </StackPanel>
+                      <StackPanel x:Name="OpsParamsDrill" Visibility="Collapsed">
+                        <CheckBox x:Name="OpsDrillChk" Content="钻孔" IsChecked="True"
+                                  FontSize="12" Margin="0,0,0,8" Click="OnCamStrategyEnableClick" />
+                        <TextBlock Text="Plunge rate (mm/min)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="DrillPlunge" Text="1000" Margin="0,0,0,6" LostFocus="OnDrillFieldChanged" />
+                        <TextBlock Text="转速 (rpm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="DrillRpm" Text="14500" Margin="0,0,0,12" LostFocus="OnDrillFieldChanged" />
+                        <TextBlock Text="贯通下探 (mm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="DrillThrough" Text="-0.55" Margin="0,0,0,12" LostFocus="OnDrillFieldChanged"
+                                 ToolTip="只作用于通孔。盲孔深度跟特征，不在这里改。" />
+                        <TextBlock Text="最大钻孔直径 (mm)" FontSize="10" Foreground="#666" />
+                        <TextBox x:Name="DrillMaxExclusive" Text="5" Margin="0,0,0,8"
+                                 LostFocus="OnDrillThresholdChanged"
+                                 ToolTip="小于此值才钻孔；等于或更大走清底。默认 5。钻头只钻不铣。" />
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#666" Margin="0,0,0,8"
+                                   Text="不选手动刀号，孔径跟钻头走。孔间 G0。盲孔深度跟 CAD。大于阈值的孔（含铰杯）走 Area Clearance。" />
+                        <TextBlock x:Name="DrillSummary" Text="" FontSize="10" Foreground="#666" TextWrapping="Wrap" />
+                      </StackPanel>
+
+                      <StackPanel Visibility="Collapsed">
+                        <CheckBox x:Name="OpsTongueChk" IsChecked="True" Click="OnCamStrategyEnableClick" />
+                        <CheckBox x:Name="OpsProfileChk" IsChecked="True" Click="OnCamStrategyEnableClick" />
+                        <CheckBox x:Name="OpsProfileLastChk" IsChecked="True" Click="OnCamStrategyEnableClick" />
+                        <CheckBox x:Name="OpsBridgeChk" IsChecked="True" Click="OnCamStrategyEnableClick" />
+                      </StackPanel>
+                    </StackPanel>
+                  </ScrollViewer>
+                </Border>
+              </DockPanel>
+            </Border>
+
+            <Border x:Name="NcPane" Grid.Column="2" Background="#F7F7F7" BorderBrush="#C8C8C8" BorderThickness="1,0,0,0" Visibility="Collapsed">
+              <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="12,10,12,8">
+                  <TextBlock x:Name="NcPaneTitle" Text="刀路文件" FontWeight="SemiBold" Foreground="#333" />
+                  <TextBlock x:Name="OutOpsMeta" Text="" FontSize="11" Foreground="#666" Margin="0,4,0,0" TextWrapping="Wrap" />
+                  <TextBlock Text="Ctrl 多选 · Shift 连选" FontSize="10" Foreground="#999" Margin="0,2,0,0" />
+                  <StackPanel Visibility="Collapsed">
+                    <TextBlock x:Name="PreflightMeta" />
+                    <WrapPanel x:Name="OutExportPanel">
+                      <Button x:Name="OutPreflightBtn" Click="OnPreflightClick" />
+                      <Button x:Name="OutSaveNcBtn" Click="OnSaveNcClick" />
+                      <Button x:Name="OutDxfBtn" Click="OnExportDxfClick" />
+                      <Button x:Name="OutJobSheetBtn" Click="OnExportJobSheetClick" />
+                      <Button x:Name="OutJsonBtn" Click="OnExportJsonClick" />
+                      <Button x:Name="OutBundleBtn" Click="OnExportBundleClick" />
+                    </WrapPanel>
                   </StackPanel>
-                  <TextBlock x:Name="PreflightMeta" Foreground="#AAAAAA" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" />
-                  <WrapPanel x:Name="OutExportPanel" Margin="0,8,0,0" Visibility="Collapsed">
-                    <Button x:Name="OutPreflightBtn" Content="预检" Click="OnPreflightClick" Margin="0,0,6,4" />
-                    <Button x:Name="OutSaveNcBtn" Content="导出 NC…" Click="OnSaveNcClick" Margin="0,0,6,4" />
-                    <Button x:Name="OutDxfBtn" Content="导出 DXF…" Click="OnExportDxfClick" Margin="0,0,6,4" />
-                    <Button x:Name="OutJobSheetBtn" Content="导出工单…" Click="OnExportJobSheetClick" Margin="0,0,6,4" />
-                    <Button x:Name="OutJsonBtn" Content="导出 JSON…" Click="OnExportJsonClick" Margin="0,0,6,4" />
-                    <Button x:Name="OutBundleBtn" Content="一键打包…" Click="OnExportBundleClick" Margin="0,0,6,4" />
-                  </WrapPanel>
                 </StackPanel>
-                <TextBox x:Name="NcPreview" IsReadOnly="True" AcceptsReturn="True"
-                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                         FontFamily="Consolas" FontSize="12"
-                         Background="#1E1E1E" Foreground="#D4D4D4" BorderThickness="0" Margin="6" />
+                <StackPanel DockPanel.Dock="Bottom" Margin="12,8,12,12">
+                  <Button x:Name="OutExportSelectedBtn" Content="导出当前选中" Click="OnExportSelectedClick"
+                          Padding="8,6" Margin="0,0,0,6" IsEnabled="False" />
+                  <Button x:Name="OutExportAllBtn" Content="导出全部" Click="OnExportAllClick"
+                          Padding="8,6" IsEnabled="False" />
+                </StackPanel>
+                <ListBox x:Name="OutFileList" BorderThickness="0" Background="Transparent"
+                         Padding="6,0,6,8" FontSize="12"
+                         SelectionMode="Extended"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         SelectionChanged="OnOutFileSelected">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <StackPanel Margin="4,6,4,8">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" Foreground="#222" />
+                        <TextBlock Text="{Binding FileName}" FontSize="10" Foreground="#666" Margin="0,2,0,0" />
+                        <TextBlock Text="{Binding Detail}" FontSize="10" Foreground="#888" Margin="0,1,0,0" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
               </DockPanel>
             </Border>
           </Grid>
@@ -610,9 +875,10 @@
                          TextWrapping="Wrap" Foreground="#666" FontSize="12" Margin="0,0,0,12" />
               <TextBlock x:Name="RoutesMeta" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" />
               <TextBlock Text="工序开关（当前机型）" FontWeight="SemiBold" Margin="0,0,0,6" />
-              <CheckBox x:Name="RouteContourChk" Content="轮廓 contour" Margin="0,0,0,4" Click="OnRouteEnableClick" />
-              <CheckBox x:Name="RouteDrillChk" Content="钻孔 drill" Margin="0,0,0,4" Click="OnRouteEnableClick" />
-              <CheckBox x:Name="RouteGrooveChk" Content="开槽 groove" Margin="0,0,0,12" Click="OnRouteEnableClick" />
+              <CheckBox x:Name="RouteTongueChk" Content="半槽 T1（插 tongue）" Margin="0,0,0,4" Click="OnCamStrategyEnableClick" />
+              <CheckBox x:Name="RouteGrooveChk" Content="清底 / 其它槽" Margin="0,0,0,4" Click="OnCamStrategyEnableClick" />
+              <CheckBox x:Name="RouteContourChk" Content="外形两刀 T2" Margin="0,0,0,4" Click="OnCamStrategyEnableClick" />
+              <CheckBox x:Name="RouteDrillChk" Content="钻孔" Margin="0,0,0,12" Click="OnCamStrategyEnableClick" />
               <TextBlock Text="当前作业工序摘要" FontWeight="SemiBold" Margin="0,0,0,6" />
               <ListBox x:Name="RoutesOpsList" FontSize="12" MinHeight="160" />
               <Button Content="进入生产加工" Click="OnGotoProductionClick" HorizontalAlignment="Left" Margin="0,12,0,0" />

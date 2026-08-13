@@ -53,6 +53,100 @@ public class SqliteProjectStoreTests
     }
 
     [Fact]
+    public void Round_trips_session_cam_bridges_and_ops()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cabinetnc-proj-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var db = SqliteProjectStore.DbPathForFolder(dir);
+            var store = new SqliteProjectStore();
+            var pkgJson = """
+                {"schema":"cabinetnc.cut-package","schemaVersion":1,"panels":[{"panelId":"P1","thicknessMm":18,"outline":{"points":[[0,0],[10,0],[10,10],[0,10]],"closed":true},"features":[]}]}
+                """;
+            var session = new ProjectSessionState
+            {
+                Stage = "ops",
+                ActiveNestSheet = 1,
+                Cam = new ProjectCamSettings
+                {
+                    TongueFeed = 8500,
+                    ProfFirstFeed = 11000,
+                    HomeXyAtEnd = true,
+                    ProfFirstRamp45 = true,
+                },
+                Bridges =
+                [
+                    new BridgeDto
+                    {
+                        Id = "b1",
+                        PanelId = "P1",
+                        SheetIndex = 0,
+                        ArcLengthMm = 40,
+                        X = 12.3456,
+                        Y = 8.1,
+                        WidthMm = 5,
+                    },
+                ],
+                Ops =
+                [
+                    ProjectSessionCodec.FromOp(new CabinetNC.Domain.Manufacturing.CutOp
+                    {
+                        Op = "contour",
+                        PanelId = "P1",
+                        ToolId = "T2",
+                        Placed = true,
+                        SheetIndex = 0,
+                        Path = [(0.12346, 1.5), (10.2591, 1.5)],
+                        ThicknessMm = 15,
+                        Through = true,
+                    }),
+                ],
+                StockKinds =
+                [
+                    new StockKindDto
+                    {
+                        MaterialId = "oak",
+                        Label = "橡木",
+                        ThicknessMm = 15,
+                        WidthMm = 1220,
+                        LengthMm = 2440,
+                        SpacingMm = 12,
+                        BorderMm = 15,
+                    },
+                ],
+            };
+            store.Save(db, new ProjectDocument
+            {
+                Name = "job",
+                PackageJson = pkgJson,
+                MachineId = "osai_e4_1325",
+                SessionJson = ProjectSessionCodec.Serialize(session),
+            });
+
+            var loaded = store.Load(db);
+            Assert.NotNull(loaded);
+            var round = ProjectSessionCodec.Deserialize(loaded!.SessionJson);
+            Assert.NotNull(round);
+            Assert.Equal("ops", round!.Stage);
+            Assert.Equal(1, round.ActiveNestSheet);
+            Assert.Equal(8500, round.Cam.TongueFeed);
+            Assert.True(round.Cam.ProfFirstRamp45);
+            Assert.True(round.Cam.HomeXyAtEnd);
+            var bridge = Assert.Single(round.Bridges);
+            Assert.Equal(12.3456, bridge.X);
+            var op = ProjectSessionCodec.ToOp(Assert.Single(round.Ops));
+            Assert.Equal("contour", op.Op);
+            Assert.Equal(0.12346, op.Path![0].X);
+            Assert.Equal("oak", Assert.Single(round.StockKinds).MaterialId);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
     public void Round_trips_workshop_library()
     {
         var dir = Path.Combine(Path.GetTempPath(), "cabinetnc-lib-" + Guid.NewGuid().ToString("N"));

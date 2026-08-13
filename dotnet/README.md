@@ -11,8 +11,8 @@ powershell -ExecutionPolicy Bypass -File dotnet/scripts/pack.ps1
 ```
 
 Outputs under `dist/`:
-- `CabinetNC-Cut-win-x64/` — runnable folder (`CabinetNC.Desktop.exe`)
-- `CabinetNC-Cut-win-x64-*.zip` — self-contained app zip
+- `CabinetNC-Cut/` — the only runnable copy (desktop shortcut opens this)
+- `CabinetNC-Cut-*.zip` — app zip
 - `CabinetNC-Cut-src-*.zip` — source archive (no bin/obj/node_modules)
 
 

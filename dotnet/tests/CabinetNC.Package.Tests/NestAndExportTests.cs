@@ -159,7 +159,7 @@ public class NestAndExportTests
                     Kind = "holeVertical",
                     X = 0,
                     Y = 0,
-                    DiameterMm = 5,
+                    DiameterMm = 3,
                 },
             ],
         };

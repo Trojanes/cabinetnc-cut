@@ -46,8 +46,8 @@ public static class ToolBinder
     public static IReadOnlyDictionary<string, string> DefaultRoleMap { get; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["contour"] = "T1",
-            ["pocket"] = "T1",
+            ["contour"] = "T2",
+            ["pocket"] = "T2",
             ["groove"] = "T2",
             ["drill"] = "T3",
         };
@@ -55,6 +55,7 @@ public static class ToolBinder
     public static CutOp Bind(CutOp op, IReadOnlyDictionary<string, string>? roleMap = null)
     {
         if (!string.IsNullOrWhiteSpace(op.ToolId)) return op;
+        if (op.IsTongue) return op with { ToolId = "T1" };
         var map = roleMap ?? DefaultRoleMap;
         if (!map.TryGetValue(op.Op, out var toolId))
             return op;

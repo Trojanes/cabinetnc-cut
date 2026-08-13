@@ -6,7 +6,7 @@ sealed class HeldNestPart
     public required string PanelId { get; init; }
     public required string Material { get; init; }
     public double ThicknessMm { get; init; }
-    public double RotationDeg { get; init; }
+    public double RotationDeg { get; set; }
     public double WidthMm { get; init; }
     public double HeightMm { get; init; }
 }

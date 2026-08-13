@@ -109,6 +109,8 @@ public sealed class SnapshotFeature
     public SnapshotFeatureGeometry Geometry { get; init; } = new();
     public double? DepthMm { get; init; }
     public bool Through { get; init; }
+    /// <summary>True when Fusion extract saw Arc3D/Circle3D edges on the opening.</summary>
+    public bool HasArc { get; init; }
     public SnapshotFeatureIntent? Intent { get; init; }
 }
 

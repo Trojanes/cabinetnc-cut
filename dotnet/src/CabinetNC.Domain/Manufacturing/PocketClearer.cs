@@ -3,15 +3,15 @@ namespace CabinetNC.Domain.Manufacturing;
 using Clipper2Lib;
 
 /// <summary>
-/// Pocket area clear v1 — Clipper inset + zigzag fill (not boundary-only).
+/// Pocket area clear — Clipper inset + inward offset rings stitched into a spiral
+/// (inside-out), then a separate finish loop. Not a horizontal zigzag raster.
 /// ASSUMPTION: stepover = 40% tool Ø; finish/onion allowance = 0.5 mm on walls.
-/// Scan strokes are disjoint segments; finish inset is a separate closed loop.
 /// </summary>
 public static class PocketClearer
 {
     public const double DefaultOnionSkinMm = 0.5;
     public const double DefaultStepoverRatio = 0.4;
-    const double Scale = 1000;
+    const double Scale = 10000;
 
     public sealed class PocketClearRequest
     {
@@ -24,7 +24,7 @@ public static class PocketClearer
     public sealed class PocketClearResult
     {
         public required IReadOnlyList<(double X, double Y)> Path { get; init; }
-        /// <summary>Disjoint motion segments (each scan stroke).</summary>
+        /// <summary>Spiral fill as one (or few) polylines. Finish is <see cref="FinishLoop"/>.</summary>
         public IReadOnlyList<IReadOnlyList<(double X, double Y)>> Segments { get; init; } = [];
         public IReadOnlyList<(double X, double Y)>? FinishLoop { get; init; }
         public int PassCount { get; init; }
@@ -52,7 +52,6 @@ public static class PocketClearer
             EndType.Polygon);
         if (insetPaths.Count == 0 || insetPaths[0].Count < 3)
         {
-            // Too small for tool+onion — mark explicit failure (do not invent a machining path)
             var cx = req.Outline.Average(p => p.X);
             var cy = req.Outline.Average(p => p.Y);
             return new PocketClearResult
@@ -66,80 +65,137 @@ public static class PocketClearer
             };
         }
 
-        var region = insetPaths[0];
-        var minX = region.Min(p => p.X) / Scale;
-        var maxX = region.Max(p => p.X) / Scale;
-        var minY = region.Min(p => p.Y) / Scale;
-        var maxY = region.Max(p => p.Y) / Scale;
+        var region = Largest(insetPaths);
+        EnsureCcw(region);
 
-        var segments = new List<IReadOnlyList<(double X, double Y)>>();
+        var rings = OffsetRings(region, step);
+        var spiral = StitchSpiralInsideOut(rings);
+        IReadOnlyList<(double X, double Y)>? finish = ClosedLoop(region);
+
         var flat = new List<(double X, double Y)>();
-        var pass = 0;
-        var leftToRight = true;
-        for (var y = minY; y <= maxY + 1e-9; y += step)
-        {
-            var yScaled = (long)Math.Round(y * Scale);
-            // Horizontal scan line clipped to polygon via intersection with a thin band
-            var band = new Path64
-            {
-                new Point64((long)Math.Round(minX * Scale) - 10, yScaled - 1),
-                new Point64((long)Math.Round(maxX * Scale) + 10, yScaled - 1),
-                new Point64((long)Math.Round(maxX * Scale) + 10, yScaled + 1),
-                new Point64((long)Math.Round(minX * Scale) - 10, yScaled + 1),
-            };
-            var hits = Clipper.Intersect(new Paths64 { region }, new Paths64 { band }, FillRule.NonZero);
-            var segs = new List<(double x0, double x1)>();
-            foreach (var hit in hits)
-            {
-                if (hit.Count == 0) continue;
-                var xs = hit.Select(p => p.X / Scale).OrderBy(v => v).ToList();
-                segs.Add((xs.First(), xs.Last()));
-            }
-            segs = segs.OrderBy(s => s.x0).ToList();
-            if (segs.Count == 0) continue;
-            pass++;
-            if (!leftToRight) segs.Reverse();
-            foreach (var (x0, x1) in segs)
-            {
-                (double X, double Y) a, b;
-                if (leftToRight)
-                {
-                    a = (x0, y);
-                    b = (x1, y);
-                }
-                else
-                {
-                    a = (x1, y);
-                    b = (x0, y);
-                }
-                segments.Add([a, b]);
-                flat.Add(a);
-                flat.Add(b);
-            }
-            leftToRight = !leftToRight;
-        }
+        if (spiral.Count >= 2)
+            flat.AddRange(spiral);
+        if (finish is not null)
+            flat.AddRange(finish);
 
-        // Finish: one boundary pass on inset (onion skin leave stock on outer wall) — separate loop
-        IReadOnlyList<(double X, double Y)>? finish = null;
-        if (region.Count >= 3)
-        {
-            var loop = new List<(double X, double Y)>(region.Count + 1);
-            foreach (var p in region)
-                loop.Add((p.X / Scale, p.Y / Scale));
-            loop.Add((region[0].X / Scale, region[0].Y / Scale));
-            finish = loop;
-            flat.AddRange(loop);
-        }
+        IReadOnlyList<IReadOnlyList<(double X, double Y)>> segments =
+            spiral.Count >= 2 ? [spiral] : [];
 
         return new PocketClearResult
         {
             Path = flat,
             Segments = segments,
             FinishLoop = finish,
-            PassCount = pass,
+            PassCount = Math.Max(1, rings.Count),
             StepoverMm = step,
             InsetMm = inset,
         };
+    }
+
+    static List<Path64> OffsetRings(Path64 outer, double stepMm)
+    {
+        var rings = new List<Path64> { outer };
+        var current = new Paths64 { outer };
+        for (var i = 0; i < 80; i++)
+        {
+            var next = Clipper.InflatePaths(
+                current, -stepMm * Scale, JoinType.Round, EndType.Polygon);
+            if (next.Count == 0) break;
+            var ring = Largest(next);
+            if (ring.Count < 3) break;
+            EnsureCcw(ring);
+            if (Math.Abs(Clipper.Area(ring)) < Scale * Scale * 0.5)
+                break;
+            rings.Add(ring);
+            current = [ring];
+        }
+        return rings;
+    }
+
+    static List<(double X, double Y)> StitchSpiralInsideOut(IReadOnlyList<Path64> outerToInner)
+    {
+        var spiral = new List<(double X, double Y)>();
+        if (outerToInner.Count == 0) return spiral;
+
+        (double X, double Y)? last = null;
+        for (var r = outerToInner.Count - 1; r >= 0; r--)
+        {
+            var pts = ToPoints(outerToInner[r]);
+            if (pts.Count < 3) continue;
+            var start = last is { } p ? NearestIndex(pts, p) : MinXIndex(pts);
+            RotateInPlace(pts, start);
+            if (last is not null)
+                spiral.Add(pts[0]);
+            for (var i = 0; i < pts.Count; i++)
+                spiral.Add(pts[i]);
+            last = pts[^1];
+        }
+        return spiral;
+    }
+
+    static Path64 Largest(Paths64 paths) =>
+        paths.OrderByDescending(p => Math.Abs(Clipper.Area(p))).First();
+
+    static void EnsureCcw(Path64 path)
+    {
+        if (Clipper.Area(path) < 0)
+            path.Reverse();
+    }
+
+    static List<(double X, double Y)> ToPoints(Path64 path)
+    {
+        var pts = new List<(double X, double Y)>(path.Count);
+        foreach (var p in path)
+            pts.Add((p.X / Scale, p.Y / Scale));
+        if (pts.Count >= 2)
+        {
+            var a = pts[0];
+            var b = pts[^1];
+            if (Math.Abs(a.X - b.X) < 1e-6 && Math.Abs(a.Y - b.Y) < 1e-6)
+                pts.RemoveAt(pts.Count - 1);
+        }
+        return pts;
+    }
+
+    static IReadOnlyList<(double X, double Y)> ClosedLoop(Path64 region)
+    {
+        var loop = new List<(double X, double Y)>(region.Count + 1);
+        foreach (var p in region)
+            loop.Add((p.X / Scale, p.Y / Scale));
+        loop.Add((region[0].X / Scale, region[0].Y / Scale));
+        return loop;
+    }
+
+    static int NearestIndex(IReadOnlyList<(double X, double Y)> pts, (double X, double Y) p)
+    {
+        var best = 0;
+        var bestD = double.PositiveInfinity;
+        for (var i = 0; i < pts.Count; i++)
+        {
+            var dx = pts[i].X - p.X;
+            var dy = pts[i].Y - p.Y;
+            var d = dx * dx + dy * dy;
+            if (d >= bestD) continue;
+            bestD = d;
+            best = i;
+        }
+        return best;
+    }
+
+    static int MinXIndex(IReadOnlyList<(double X, double Y)> pts)
+    {
+        var best = 0;
+        for (var i = 1; i < pts.Count; i++)
+            if (pts[i].X < pts[best].X) best = i;
+        return best;
+    }
+
+    static void RotateInPlace(List<(double X, double Y)> pts, int start)
+    {
+        if (start <= 0 || start >= pts.Count) return;
+        var head = pts.GetRange(0, start);
+        pts.RemoveRange(0, start);
+        pts.AddRange(head);
     }
 
     static Path64 ToPath64(IReadOnlyList<(double X, double Y)> pts)

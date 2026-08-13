@@ -5,8 +5,8 @@ $env:Path = "C:\Program Files\dotnet;" + $env:Path
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $stamp = Get-Date -Format "yyyyMMdd-HHmm"
 $dist = Join-Path $root "dist"
-$pub = Join-Path $dist "CabinetNC-Cut-win-x64"
-$zipApp = Join-Path $dist "CabinetNC-Cut-win-x64-$stamp.zip"
+$pub = Join-Path $dist "CabinetNC-Cut"
+$zipApp = Join-Path $dist "CabinetNC-Cut-$stamp.zip"
 $zipSrc = Join-Path $dist "CabinetNC-Cut-src-$stamp.zip"
 
 Write-Host "==> clean dist/publish dir"
@@ -40,19 +40,28 @@ if (Test-Path $samplesSrc) {
   Copy-Item (Join-Path $samplesSrc "*") $samplesDst -Recurse -Force
 }
 
+# Launcher used by the desktop shortcut
+@"
+@echo off
+setlocal
+set "APP_DIR=%~dp0"
+set "DOTNET_ROOT=C:\Program Files\dotnet"
+set "PATH=%DOTNET_ROOT%;%PATH%"
+cd /d "%APP_DIR%"
+start "" "%APP_DIR%CabinetNC.Desktop.exe"
+"@ | Set-Content (Join-Path $pub "Start-CabinetNC-Cut.cmd") -Encoding ASCII
+
 # Short readme
 @"
-CabinetNC Cut — Desktop (win-x64)
+CabinetNC Cut
 Built: $stamp
 
 Run:
-  CabinetNC.Desktop.exe
+  Start-CabinetNC-Cut.cmd
+  or CabinetNC.Desktop.exe
 
-Requires: Windows 10/11 x64 (self-contained .NET runtime included).
+This folder is the only runnable copy. The desktop shortcut opens it.
 Worker: CabinetNC.ComputeWorker.exe (spawned automatically).
-Demo: public\samples\demo_cut_package.json (auto-loaded if present).
-
-Stages: Geom → Nest → CAM → Out
 "@ | Set-Content (Join-Path $pub "README.txt") -Encoding UTF8
 
 Write-Host "==> zip runnable app → $zipApp"

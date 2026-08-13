@@ -1,11 +1,14 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CabinetNC.Application.Projects;
@@ -43,34 +46,87 @@ public partial class MainWindow : Window
     readonly Dictionary<int, GuillotineCutPlanner.Result> _guillotineBySheet = new();
     readonly List<HeldNestPart> _nestHolding = [];
     List<CanvasPainter.NestHoldingItem> _holdingLayout = [];
+    List<CanvasPainter.NestHoldingRegion> _holdingRegions = [];
     float _holdingBayLeft;
     bool _nestDragFromHold;
+    bool _holdPreviewOnSheet;
+    bool _holdPreviewBlocked;
+    readonly List<CanvasPainter.HoldPreviewPart> _holdPreviewPlaces = [];
     int _activeNestSheet;
     bool _showNest;
     string _stage = "load";
     string _module = "production";
     bool _nestBusy;
     bool _stageChanging;
-    bool _enableContour = true;
-    bool _enableDrill = true;
-    bool _enableGroove = true;
+    bool _enableTongue = true;
+    bool _enableProfile = true;
+    bool _enableProfileLast = true;
+    bool _enableClearance = true;
+    bool _enableBridges = true;
+    bool _enableDrilling = true;
+    TroyPassKind? _opsFocus;
+    CamStrategyKind? _opsStrategy;
+    string _opsSummary = "";
+    string _profFirstTool = "T2";
+    string _profLastTool = "T2";
+    double _profFirstFeed = 12000;
+    double _profFirstRpm = 14500;
+    double _profFirstPlunge = 1000;
+    bool _profFirstRamp45;
+    double _profFirstLeave = 0.5;
+    double _profLastFeed = 20000;
+    double _profLastRpm = 14500;
+    double _profLastPlunge = 1000;
+    double _profLastThrough = -0.55;
+    double _tongueFeed = TroyRecipe.TongueFeedMmMin;
+    double _tongueRpm = TroyRecipe.SpindleRpm;
+    double _tonguePlunge = TroyRecipe.PlungeFeedMmMin;
+    bool _homeXyAtEnd = true;
+    double _profBridgeWidth = ProfileBridgePlanner.DefaultWidthMm;
+    double _profTinyAreaM2 = ProfileBridgePlanner.TinyAreaM2;
+    double _profLargeAreaM2 = ProfileBridgePlanner.LargeAreaM2;
+    double _profStripAspect = ProfileBridgePlanner.StripAspect;
+    double _clrFeed = TroyRecipe.WorkFirstFeedMmMin;
+    double _clrRpm = TroyRecipe.SpindleRpm;
+    double _clrPlunge = TroyRecipe.PlungeFeedMmMin;
+    double _clrLargeMinShort = ClearanceToolPick.LargeMinShortMm;
+    double _drillPlunge = TroyRecipe.PlungeFeedMmMin;
+    double _drillRpm = TroyRecipe.SpindleRpm;
+    double _drillThrough = TroyRecipe.ThroughZMm;
+    double _drillMaxExclusive = ClearanceToolPick.DrillMaxExclusiveMm;
+    bool _bridgeManualMode;
+    bool _bridgeDeleteMode;
+    readonly List<ProfileBridge> _profileBridges = [];
+    bool _opsAllSheets = true;
+    bool _syncingOpsStrategy;
+    bool _syncingOpsIcons;
     string? _activeToolId;
     IReadOnlyList<CamFrame> _camFrames = [];
     int _camFrameIndex;
     readonly DispatcherTimer _camTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     // drag state
-    string? _dragMode; // geom | nest
+    string? _dragMode; // geom | nest | nestBox
     GeomInteraction.Hit? _geomHit;
     PanelPart? _geomStart;
     string? _nestDragPanelId;
     double _nestStartMx, _nestStartMy, _nestOrigOx, _nestOrigOy;
+    double _nestDragRotDeg;
+    readonly HashSet<string> _nestSelected = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (double Ox, double Oy, double Rot)> _nestGroupOrig = new(StringComparer.Ordinal);
+    double _holdSlideOx, _holdSlideOy;
+    bool _holdSlideHasValid;
+    double _nestBoxX0, _nestBoxY0, _nestBoxX1, _nestBoxY1;
+    bool _syncingNestSelection;
     GeomInteraction.View? _geomView;
     float _nestPad, _nestScale, _nestSheetH, _nestSheetW;
     int _surfaceW, _surfaceH;
     double _dpiX = 1, _dpiY = 1;
     string? _hoverHint;
     IReadOnlyList<CutOp> _opsOverlay = [];
+    List<ExportNcFile> _exportFiles = [];
+    ExportNcFile? _exportSelected;
+    bool _syncingExportFiles;
     readonly List<StockMaterialKindVm> _stockKinds = [];
     bool _syncingMachineCombo;
 
@@ -82,10 +138,13 @@ public partial class MainWindow : Window
             MachineCombo.Items.Add(m);
             StockMachineCombo.Items.Add(m);
             MachineComboModule.Items.Add(m);
+            OpsMachineCombo.Items.Add(m);
         }
         MachineCombo.SelectedValue = MachineCatalog.DefaultId;
         StockMachineCombo.SelectedValue = MachineCatalog.DefaultId;
         MachineComboModule.SelectedValue = MachineCatalog.DefaultId;
+        OpsMachineCombo.SelectedValue = MachineCatalog.DefaultId;
+        BindOpsToolCombos();
         ApplyLibraryToSettingsUi();
         ApplyLibraryToNestBoxes();
         StageTabs.SelectedIndex = 0;
@@ -98,6 +157,15 @@ public partial class MainWindow : Window
         RefreshEmptyState();
         _camTimer.Tick += (_, _) => StepCam(1);
         PreviewKeyDown += OnPreviewKeyDown;
+        PreviewKeyUp += OnPreviewKeyUp;
+        Deactivated += (_, _) => CanvasHost.InvalidateVisual();
+        PreviewMouseRightButtonDown += OnWindowRightDown;
+        PreviewMouseRightButtonUp += OnWindowRightUp;
+        SourceInitialized += (_, _) =>
+        {
+            _hwndSource = PresentationSource.FromVisual(this) as HwndSource;
+            _hwndSource?.AddHook(WndProc);
+        };
 
         Loaded += async (_, _) =>
         {
@@ -116,6 +184,11 @@ public partial class MainWindow : Window
         {
             UsageLog.LogEvent("ui", "desktop.mainClosed");
             _camTimer.Stop();
+            if (_hwndSource is not null)
+            {
+                _hwndSource.RemoveHook(WndProc);
+                _hwndSource = null;
+            }
             await _worker.DisposeAsync();
         };
     }
@@ -129,6 +202,22 @@ public partial class MainWindow : Window
 
     void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (IsAltKey(e) && _dragMode == "nest")
+        {
+            if (!e.IsRepeat)
+                ApplyNestDragAtLastPointer();
+            e.Handled = true;
+            return;
+        }
+
+        if (IsSKey(e) && _dragMode == "nest" && !IsTypingTarget())
+        {
+            if (!e.IsRepeat)
+                ApplyNestDragAtLastPointer();
+            e.Handled = true;
+            return;
+        }
+
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {
             if (e.Key == Key.Z)
@@ -172,8 +261,30 @@ public partial class MainWindow : Window
             else
                 OnDeletePanelClick(sender, e);
             e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.D && Keyboard.Modifiers == ModifierKeys.None && !IsTypingTarget())
+        {
+            if (!e.IsRepeat)
+                CanvasHost.InvalidateVisual();
+            if (_stage is "nest" or "ops" && _nestSelected.Count == 2)
+                e.Handled = true;
         }
     }
+
+    void OnPreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        if (IsAltKey(e) && _dragMode == "nest")
+            ApplyNestDragAtLastPointer();
+        if (IsSKey(e) && _dragMode == "nest" && !IsTypingTarget())
+            ApplyNestDragAtLastPointer();
+        if (e.Key == Key.D)
+            CanvasHost.InvalidateVisual();
+    }
+
+    static bool IsTypingTarget() =>
+        Keyboard.FocusedElement is TextBox or PasswordBox or ComboBox;
 
     void AfterHistoryRestore()
     {
@@ -203,8 +314,10 @@ public partial class MainWindow : Window
         }
 
         _stage = next;
+        if (_stage != "ops")
+            ExitBridgeModes();
         // Nest canvas only after an intentional nest run — blank until「初始密排」.
-        _showNest = (_stage is "nest" or "ops") && _nest is { Ok: true };
+        _showNest = (_stage is "nest" or "ops" or "out") && _nest is { Ok: true };
         ApplyStageVisibility();
         UpdateCanvasHint();
         UpdateStageChrome();
@@ -236,11 +349,10 @@ public partial class MainWindow : Window
         }
         else if (_stage == "ops")
         {
-            RebuildOpsOverlay();
-            SetStatus(_nest is { Ok: true } ? "刀路 · 绿轮廓 · 蓝孔" : "刀路 · 先完成密排");
+            SetStatus(_nest is { Ok: true } ? "刀路 · 点 Profiling / Clearance / Drilling 看参数" : "刀路 · 请先完成密排");
         }
         else if (_stage == "out")
-            SetStatus(string.IsNullOrWhiteSpace(NcPreview.Text) ? "导出 · 尚无 NC" : "导出 · 可保存 NC");
+            SetStatus("导出");
     }
 
     void ApplyStageVisibility()
@@ -254,17 +366,13 @@ public partial class MainWindow : Window
         var showGeomRail = _stage == "load" && hasPkg;
         var showStockRail = _stage == "stock";
         var showNestRail = _stage == "nest";
-        var showNc = _stage is "ops" or "out";
-        var showCanvas = _stage is not "out";
         GeomPane.Visibility = showGeomRail ? Visibility.Visible : Visibility.Collapsed;
         StockPane.Visibility = showStockRail ? Visibility.Visible : Visibility.Collapsed;
         NestPane.Visibility = showNestRail ? Visibility.Visible : Visibility.Collapsed;
-        NcPane.Visibility = showNc ? Visibility.Visible : Visibility.Collapsed;
-        CanvasPane.Visibility = showCanvas ? Visibility.Visible : Visibility.Collapsed;
+        CanvasPane.Visibility = Visibility.Visible;
 
         NestPaneTitle.Text = "密排";
         NestApplyBtn.Visibility = Visibility.Visible;
-        NestNcBtn.Visibility = Visibility.Visible;
         if (showStockRail)
             RefreshStockMaterialCards();
         if (showNestRail)
@@ -274,42 +382,42 @@ public partial class MainWindow : Window
             UpdateNestSheetChrome();
         }
 
+        OpsPane.Visibility = _stage == "ops" ? Visibility.Visible : Visibility.Collapsed;
+        NcPane.Visibility = _stage == "out" ? Visibility.Visible : Visibility.Collapsed;
+        OutGcodePane.Visibility = _stage == "out" ? Visibility.Visible : Visibility.Collapsed;
+        if (OutPreviewCaption is not null)
+            OutPreviewCaption.Visibility = Visibility.Collapsed;
+
+        LeftRail.Visibility = _stage is "ops" or "out" ? Visibility.Collapsed : Visibility.Visible;
+
+        Grid.SetColumn(GeomPane, 2);
+        Grid.SetColumn(StockPane, 2);
+        Grid.SetColumn(NestPane, 2);
+        Grid.SetColumn(OpsPane, 2);
+        Grid.SetColumn(NcPane, 2);
+        Grid.SetColumnSpan(GeomPane, 1);
+        Grid.SetColumnSpan(StockPane, 1);
+        Grid.SetColumnSpan(NestPane, 1);
+        Grid.SetColumnSpan(OpsPane, 1);
+        Grid.SetColumnSpan(NcPane, 1);
+
         if (_stage == "out")
         {
-            Grid.SetColumn(NcPane, 1);
-            Grid.SetColumnSpan(NcPane, 2);
-            NcCol.Width = new GridLength(0);
-            NcPaneTitle.Text = "导出 · NC / DXF / 工单";
-            OutSaveNcBtn.Visibility = Visibility.Visible;
-            OutExportPanel.Visibility = Visibility.Visible;
-            OpsListBox.Visibility = Visibility.Collapsed;
-            CamSimPanel.Visibility = Visibility.Collapsed;
-            OpsMeta.Text = string.IsNullOrWhiteSpace(NcPreview.Text) ? "无 NC — 先密排并生成加工档" : "可导出 NC / DXF / 工单 / JSON";
-            RefreshPreflightMeta();
+            LeftCol.Width = new GridLength(1.4, GridUnitType.Star);
+            NcCol.Width = new GridLength(280);
+            NcPaneTitle.Text = "刀路文件";
+            RefreshExportFiles();
+        }
+        else if (_stage == "ops")
+        {
+            LeftCol.Width = new GridLength(0);
+            ApplyOpsChrome();
+            RefreshOpsRail();
         }
         else
         {
-            Grid.SetColumn(GeomPane, 2);
-            Grid.SetColumn(StockPane, 2);
-            Grid.SetColumn(NestPane, 2);
-            Grid.SetColumn(NcPane, 2);
-            Grid.SetColumnSpan(GeomPane, 1);
-            Grid.SetColumnSpan(StockPane, 1);
-            Grid.SetColumnSpan(NestPane, 1);
-            Grid.SetColumnSpan(NcPane, 1);
+            LeftCol.Width = new GridLength(200);
             NcCol.Width = new GridLength(300);
-            NcPaneTitle.Text = _stage == "ops" ? "刀路 / 加工档" : "NC";
-            OutSaveNcBtn.Visibility = Visibility.Collapsed;
-            OutExportPanel.Visibility = Visibility.Collapsed;
-            OpsListBox.Visibility = _stage == "ops" ? Visibility.Visible : Visibility.Collapsed;
-            CamSimPanel.Visibility = _stage == "ops" ? Visibility.Visible : Visibility.Collapsed;
-            if (_stage == "ops")
-            {
-                OpsMeta.Text = _opsOverlay.Count > 0
-                    ? $"ops {_opsOverlay.Count} · canvas overlay"
-                    : "先密排 + 生成加工档";
-                RefreshOpsListBox();
-            }
         }
 
         RefreshOneClickExport();
@@ -324,8 +432,8 @@ public partial class MainWindow : Window
                 : "载入方案: 检视板件 · 拖孔/槽/边 · 右侧可加特征",
             "stock" => "板材与设备: 板宽/板长/边距/间距 · 选择机型",
             "nest" => "密排: 左右翻大板 · 拖摆位 · 锁定后重排保留",
-            "ops" => "刀路与加工档: 绿虚线=轮廓 · 蓝十字=孔（只读）",
-            "out" => "导出: 预览 NC · 导出 NC 或一键导出",
+            "ops" => "刀路: 选机器 · Profiling / Area Clearance / Drilling · 计算当前板或全部",
+            "out" => "导出: 点右侧刀路文件，左边看 G-code，中间看该大板刀路",
             _ => "",
         };
         AllowOverlapChk.Visibility = _stage == "nest" ? Visibility.Visible : Visibility.Collapsed;
@@ -367,10 +475,242 @@ public partial class MainWindow : Window
     }
 
     bool HasNcText() =>
-        !string.IsNullOrWhiteSpace(NcPreview.Text) && !NcPreview.Text.StartsWith("//");
+        _exportFiles.Count > 0
+        || (!string.IsNullOrWhiteSpace(NcPreview.Text) && !NcPreview.Text.StartsWith("//"));
 
     void RefreshOneClickExport() =>
         OneClickExportBtn.IsEnabled = _nest is { Ok: true, Placements.Count: > 0 } && HasNcText();
+
+    public sealed class ExportNcFile
+    {
+        public required string FileName { get; init; }
+        public required string Title { get; init; }
+        public required string Detail { get; init; }
+        public required int SheetIndex { get; init; }
+        public required string ToolId { get; init; }
+        public required string NcText { get; init; }
+        public required IReadOnlyList<CutOp> Ops { get; init; }
+    }
+
+    static int ExportToolRank(string? toolId) => (toolId ?? "").ToUpperInvariant() switch
+    {
+        "T3" => 0,
+        "T1" => 1,
+        "T2" => 2,
+        _ => 8,
+    };
+
+    static string ExportKindLabel(IReadOnlyList<CutOp> ops)
+    {
+        if (ops.Count == 0) return "刀路";
+        if (ops.All(o => o.Op == "drill")) return "钻孔";
+        if (ops.All(o => o.Op == "groove" && o.IsTongue)) return "半槽";
+        var hasContour = ops.Any(o => o.Op == "contour");
+        var hasClear = ops.Any(o => o.Op == "pocket" || (o.Op == "groove" && !o.IsTongue));
+        if (hasContour && hasClear) return "清底+外形";
+        if (hasContour) return "外形";
+        if (hasClear) return "清底";
+        if (ops.Any(o => o.IsTongue)) return "半槽";
+        return "刀路";
+    }
+
+    static string ExportSheetDetail(IReadOnlyList<CutOp> ops)
+    {
+        var tools = ops
+            .Select(o => o.ToolId)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(ExportToolRank)
+            .ThenBy(t => t, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var toolBit = tools.Count > 0 ? string.Join("+", tools) + " · " : "";
+        return $"{toolBit}{ExportKindLabel(ops)} · {ops.Count} 刀";
+    }
+
+    void RefreshExportFiles()
+    {
+        if (OutFileList is null || NcPreview is null) return;
+        var keepName = _exportSelected?.FileName;
+        var keepSheet = _exportSelected?.SheetIndex;
+        _exportFiles = [];
+        if (_opsOverlay.Count > 0 && _nest is { Ok: true })
+        {
+            var profile = ActiveProfileForCam();
+            var recipe = CurrentPostRecipe();
+            var jobId = _session.Package?.JobId ?? "job";
+            foreach (var sheetGroup in _opsOverlay
+                         .Where(o => o.Placed && o.Enabled)
+                         .GroupBy(o => o.SheetIndex)
+                         .OrderBy(g => g.Key))
+            {
+                var ops = sheetGroup.ToList();
+                string nc;
+                try
+                {
+                    nc = NcEmitter.OpsToNc(ops, profile, recipe: recipe);
+                }
+                catch (Exception ex)
+                {
+                    nc = "// " + ex.Message;
+                }
+                var tools = ops
+                    .Select(o => o.ToolId)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(ExportToolRank)
+                    .ToList();
+                _exportFiles.Add(new ExportNcFile
+                {
+                    FileName = $"{jobId}_S{sheetGroup.Key + 1}.anc",
+                    Title = $"大板 {sheetGroup.Key + 1}",
+                    Detail = ExportSheetDetail(ops),
+                    SheetIndex = sheetGroup.Key,
+                    ToolId = string.Join("+", tools),
+                    NcText = nc,
+                    Ops = ops,
+                });
+            }
+        }
+
+        _syncingExportFiles = true;
+        OutFileList.ItemsSource = _exportFiles;
+        ExportNcFile? pick = null;
+        if (keepName is not null)
+            pick = _exportFiles.FirstOrDefault(f => f.FileName == keepName);
+        if (pick is null && keepSheet is int si)
+            pick = _exportFiles.FirstOrDefault(f => f.SheetIndex == si);
+        pick ??= _exportFiles.FirstOrDefault();
+        OutFileList.SelectedItem = pick;
+        _syncingExportFiles = false;
+        ApplyExportFile(pick);
+        RefreshExportButtons();
+        OutOpsMeta.Text = _exportFiles.Count == 0
+            ? "请先在「4 刀路与加工档」计算刀路"
+            : $"{_exportFiles.Count} 张大板 · 每板一个文件";
+        RefreshPreflightMeta();
+        RefreshWorkflowDots();
+    }
+
+    void OnOutFileSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingExportFiles) return;
+        ApplyExportFile(OutFileList.SelectedItem as ExportNcFile);
+        RefreshExportButtons();
+    }
+
+    void RefreshExportButtons()
+    {
+        if (OutExportSelectedBtn is null || OutExportAllBtn is null) return;
+        OutExportSelectedBtn.IsEnabled = OutFileList.SelectedItems.Count > 0;
+        OutExportAllBtn.IsEnabled = _exportFiles.Count > 0;
+    }
+
+    IReadOnlyList<ExportNcFile> SelectedExportFiles()
+    {
+        var picked = OutFileList.SelectedItems.Cast<ExportNcFile>().ToHashSet();
+        return _exportFiles.Where(picked.Contains).ToList();
+    }
+
+    void OnExportSelectedClick(object sender, RoutedEventArgs e)
+    {
+        var files = SelectedExportFiles();
+        if (files.Count == 0)
+        {
+            SetStatus("请先选中刀路文件");
+            return;
+        }
+        WriteExportNcFiles(files);
+    }
+
+    void OnExportAllClick(object sender, RoutedEventArgs e)
+    {
+        if (_exportFiles.Count == 0)
+        {
+            SetStatus("没有可导出的刀路文件");
+            return;
+        }
+        WriteExportNcFiles(_exportFiles.ToList());
+    }
+
+    void WriteExportNcFiles(IReadOnlyList<ExportNcFile> files)
+    {
+        var names = files.Select(f => f.FileName).ToList();
+        var snapshot = files.ToDictionary(f => f.FileName, StringComparer.Ordinal);
+        if (!GuardExportPreflight()) return;
+
+        var byName = _exportFiles.ToDictionary(f => f.FileName, StringComparer.Ordinal);
+        var toWrite = new List<ExportNcFile>();
+        foreach (var name in names)
+        {
+            if (byName.TryGetValue(name, out var fresh))
+                toWrite.Add(fresh);
+            else if (snapshot.TryGetValue(name, out var old))
+                toWrite.Add(old);
+        }
+        toWrite = toWrite.Where(f => !string.IsNullOrWhiteSpace(f.NcText) && !f.NcText.StartsWith("//")).ToList();
+        if (toWrite.Count == 0)
+        {
+            SetStatus("选中的文件没有可写的 G-code");
+            return;
+        }
+
+        if (toWrite.Count == 1)
+        {
+            var one = toWrite[0];
+            var dlg = new SaveFileDialog
+            {
+                Filter = "Troy OSAI (*.anc)|*.anc|NC (*.nc)|*.nc|All|*.*",
+                FileName = one.FileName,
+                Title = "导出当前选中",
+            };
+            if (dlg.ShowDialog() != true) return;
+            File.WriteAllText(dlg.FileName, one.NcText);
+            SetStatus($"已导出 {one.FileName} → {dlg.FileName}");
+            UsageLog.LogActionResult("export.nc.selected", new Dictionary<string, object?>
+            {
+                ["ok"] = true,
+                ["count"] = 1,
+                ["path"] = dlg.FileName,
+                ["file"] = one.FileName,
+            });
+            return;
+        }
+
+        var folder = new OpenFolderDialog { Title = "选择导出目录" };
+        if (folder.ShowDialog() != true) return;
+        var dir = folder.FolderName;
+        foreach (var f in toWrite)
+            File.WriteAllText(Path.Combine(dir, f.FileName), f.NcText);
+        SetStatus($"已导出 {toWrite.Count} 个文件 → {dir}");
+        UsageLog.LogActionResult("export.nc.files", new Dictionary<string, object?>
+        {
+            ["ok"] = true,
+            ["count"] = toWrite.Count,
+            ["dir"] = dir,
+            ["files"] = toWrite.Select(f => f.FileName).ToArray(),
+        });
+    }
+
+    void ApplyExportFile(ExportNcFile? file)
+    {
+        _exportSelected = file;
+        if (NcPreview is not null)
+            NcPreview.Text = file?.NcText ?? "";
+        if (file is not null)
+        {
+            _activeNestSheet = file.SheetIndex;
+            UpdateNestSheetChrome();
+            SetStatus($"导出 · {file.Title}");
+        }
+        if (OutPreviewCaption is not null)
+        {
+            OutPreviewCaption.Text = file?.Title ?? "";
+            OutPreviewCaption.Visibility = _stage == "out" && file is not null
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        CanvasHost.InvalidateVisual();
+    }
 
     void RefreshEmptyState()
     {
@@ -438,6 +778,8 @@ public partial class MainWindow : Window
         if (_activeNestSheet <= 0) return;
         _activeNestSheet--;
         UpdateNestSheetChrome();
+        if (_stage == "ops" && !_opsAllSheets && _opsOverlay.Count > 0)
+            RebuildOpsOverlay();
         CanvasHost.InvalidateVisual();
     }
 
@@ -447,6 +789,8 @@ public partial class MainWindow : Window
         if (_activeNestSheet >= max) return;
         _activeNestSheet++;
         UpdateNestSheetChrome();
+        if (_stage == "ops" && !_opsAllSheets && _opsOverlay.Count > 0)
+            RebuildOpsOverlay();
         CanvasHost.InvalidateVisual();
     }
 
@@ -683,17 +1027,22 @@ public partial class MainWindow : Window
             $"4 刀路与加工档 {(hasNc || _opsOverlay.Count > 0 ? "✓" : "○")}\n" +
             $"5 导出 ………… {(hasNc ? "✓" : "○")}\n" +
             $"机型: {SelectedMachineId()}";
-        RouteContourChk.IsChecked = _enableContour;
-        RouteDrillChk.IsChecked = _enableDrill;
-        RouteGrooveChk.IsChecked = _enableGroove;
+        RouteTongueChk.IsChecked = _enableTongue;
+        RouteContourChk.IsChecked = _enableProfile && _enableProfileLast;
+        RouteDrillChk.IsChecked = _enableDrilling;
+        RouteGrooveChk.IsChecked = _enableClearance;
         RebuildOpsOverlay();
         RoutesOpsList.Items.Clear();
         if (_opsOverlay.Count == 0)
-            RoutesOpsList.Items.Add("无工序 — 先在生产加工中密排并生成加工档");
+            RoutesOpsList.Items.Add("无工序 — 先密排，再在刀路页按规则计算");
         else
         {
-            foreach (var g in _opsOverlay.GroupBy(o => o.Op))
-                RoutesOpsList.Items.Add($"{g.Key} × {g.Count()}");
+            RoutesOpsList.Items.Add($"T1 半槽 × {_opsOverlay.Count(o => TroyPass.InPass(o, TroyPassKind.TongueGroove))}");
+            RoutesOpsList.Items.Add($"T2 清底 × {_opsOverlay.Count(o => TroyPass.InPass(o, TroyPassKind.Clearance))}");
+            RoutesOpsList.Items.Add($"T2 外形 × {_opsOverlay.Count(o => o.Op == "contour")}");
+            var drills = _opsOverlay.Count(o => o.Op == "drill");
+            if (drills > 0)
+                RoutesOpsList.Items.Add($"钻孔 × {drills}");
         }
     }
 
@@ -812,8 +1161,18 @@ public partial class MainWindow : Window
         if (_opsOverlay.Count == 0)
             ProcessOpsList.Items.Add("无作业工序");
         else
-            foreach (var g in _opsOverlay.GroupBy(o => o.Op))
-                ProcessOpsList.Items.Add($"{g.Key} × {g.Count()}");
+            foreach (var g in new[]
+                     {
+                         TroyPassKind.TongueGroove,
+                         TroyPassKind.Clearance,
+                         TroyPassKind.ProfileFirst,
+                         TroyPassKind.Drilling,
+                     })
+            {
+                var n = _opsOverlay.Count(o => TroyPass.InPass(o, g));
+                if (n > 0)
+                    ProcessOpsList.Items.Add($"{TroyPass.Title(g)} × {n}");
+            }
         var activeTool = _library.Tools.FirstOrDefault(t => t.Id == _activeToolId);
         ProcessMeta.Text =
             $"刀具 {_library.Tools.Count} · 作业工序 {_opsOverlay.Count} · 机型 {SelectedMachineId()} · " +
@@ -863,7 +1222,6 @@ public partial class MainWindow : Window
         }
         var tool = _library.Tools[i];
         _activeToolId = tool.Id;
-        CamOffsetBox.Text = (tool.DiameterMm / 2).ToString("0.###");
         RebuildOpsOverlay();
         RegenerateNcFromCurrentOps();
         RefreshProcessModule();
@@ -951,7 +1309,14 @@ public partial class MainWindow : Window
     void RebuildOpsOverlay()
     {
         _opsOverlay = [];
-        if (_session.Package is null || _nest is not { Ok: true }) return;
+        if (_session.Package is null || _nest is not { Ok: true })
+        {
+            RefreshOpsRail();
+            RefreshCamFrames();
+            RefreshPreflightMeta();
+            RegenerateNcFromCurrentOps();
+            return;
+        }
         var places = _nest.Placements.Select(p => new NestPlacement
         {
             PanelId = p.PanelId,
@@ -959,49 +1324,629 @@ public partial class MainWindow : Window
             OffsetX = p.OffsetX,
             OffsetY = p.OffsetY,
             RotationDeg = p.RotationDeg,
-        }).ToList();
+        }).Where(p => _opsAllSheets || p.SheetIndex == _activeNestSheet).ToList();
+        ReadClearanceFields();
+        ReadDrillFields();
         var raw = OpsPlanner.FeaturesToOps(
             _session.Package.Panels,
-            _enableContour,
-            _enableDrill,
-            _enableGroove);
+            enableContour: true,
+            enableDrill: true,
+            enableGroove: true,
+            clearanceLargeMinShortMm: _clrLargeMinShort,
+            drillMaxExclusiveMm: _drillMaxExclusive);
         _opsOverlay = OpsPlanner.AttachToNest(raw, places);
-        if (CamOffsetChk.IsChecked == true)
-            _opsOverlay = ContourToolOffset.Apply(
-                _opsOverlay,
-                ParseMm(CamOffsetBox.Text, ActiveProfileForCam().ToolDiameterMm / 2));
-        OpsMeta.Text =
-            $"ops {_opsOverlay.Count} · contour={_opsOverlay.Count(o => o.Op == "contour")} " +
-            $"drill={_opsOverlay.Count(o => o.Op == "drill")} groove={_opsOverlay.Count(o => o.Op == "groove")} · " +
-            string.Join(" ", _opsOverlay.Where(o => o.Placed).GroupBy(o => o.ToolId ?? "?")
-                .Select(g => $"{g.Key}×{g.Count()}"));
-        RefreshOpsListBox();
+        _opsOverlay = ApplyAutomaticToolOffset(_opsOverlay);
+        _opsOverlay = _opsOverlay
+            .Where(PassEnabled)
+            .ToList();
+        var kept = ProfileBridgePlanner.Reproject(_profileBridges, _opsOverlay);
+        _profileBridges.Clear();
+        _profileBridges.AddRange(kept);
+        RefreshBridgeCount();
+        RefreshOpsRail();
         RefreshCamFrames();
         RefreshPreflightMeta();
+        RegenerateNcFromCurrentOps();
     }
 
-    void RefreshOpsListBox()
+    bool PassEnabled(CutOp op)
     {
-        OpsListBox.Items.Clear();
-        foreach (var g in _opsOverlay.GroupBy(o => $"{o.Op}/{o.ToolId ?? "NO_TOOL"}"))
-            OpsListBox.Items.Add($"{g.Key} × {g.Count()} (placed {g.Count(x => x.Placed)})");
-        if (OpsListBox.Items.Count == 0)
-            OpsListBox.Items.Add("无工序");
+        var kind = op.Op ?? "";
+        if (kind.Equals("drill", StringComparison.OrdinalIgnoreCase))
+            return _enableDrilling;
+        if (kind.Equals("groove", StringComparison.OrdinalIgnoreCase) && op.IsTongue)
+            return _enableTongue;
+        if (kind.Equals("pocket", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("groove", StringComparison.OrdinalIgnoreCase))
+            return _enableClearance;
+        if (kind.Equals("contour", StringComparison.OrdinalIgnoreCase))
+            return _enableProfile || _enableProfileLast;
+        return true;
     }
+
+    double ToolDiameterOf(CutOp op)
+    {
+        if (!string.IsNullOrWhiteSpace(op.ToolId))
+        {
+            var lib = _library.Tools.FirstOrDefault(t =>
+                t.Id.Equals(op.ToolId, StringComparison.OrdinalIgnoreCase));
+            if (lib is { DiameterMm: > 0 }) return lib.DiameterMm;
+            if (ToolCatalog.DefaultMap().TryGetValue(op.ToolId, out var preset) && preset.DiameterMm > 0)
+                return preset.DiameterMm;
+        }
+        return ActiveProfileForCam().ToolDiameterMm is > 0 and var d ? d : 6.35;
+    }
+
+    IReadOnlyList<CutOp> ApplyAutomaticToolOffset(IReadOnlyList<CutOp> ops)
+    {
+        var contour = ops.FirstOrDefault(o => o.Op == "contour");
+        var radius = ToolDiameterOf(contour ?? new CutOp { Op = "contour", PanelId = "_" }) / 2;
+        if (radius < 1e-6) return ops;
+        return ContourToolOffset.Apply(ops, radius);
+    }
+
+    void RefreshOpsRail()
+    {
+        SyncStrategyCheckboxes();
+        var nProfile = _opsOverlay.Count(o => CamStrategy.Classify(o) == CamStrategyKind.Profile);
+        var nClear = _opsOverlay.Count(o => CamStrategy.Classify(o) == CamStrategyKind.AreaClearance);
+        var nDrill = _opsOverlay.Count(o => CamStrategy.Classify(o) == CamStrategyKind.Drilling);
+        OpsIconProfileCount.Text = nProfile > 0 ? $"{nProfile}" : "";
+        OpsIconClearanceCount.Text = nClear > 0 ? $"{nClear}" : "";
+        OpsIconDrillCount.Text = nDrill > 0 ? $"{nDrill}" : "";
+        _opsSummary = _nest is not { Ok: true }
+            ? "请先完成密排"
+            : _opsOverlay.Count == 0
+                ? "无刀路 — 点右下计算当前板材或全部"
+                : $"Profiling {nProfile} · Area Clearance {nClear} · Drilling {nDrill}";
+        RefreshDrillSummary();
+    }
+
+    void RefreshDrillSummary()
+    {
+        var drills = _opsOverlay.Where(o => o.Op == "drill").ToList();
+        if (drills.Count == 0)
+        {
+            DrillSummary.Text = "";
+            return;
+        }
+        var groups = drills
+            .GroupBy(o => o.DiameterMm ?? 0)
+            .OrderBy(g => g.Key)
+            .Select(g => $"Ø{g.Key:0.##} × {g.Count()}");
+        DrillSummary.Text = string.Join(" · ", groups);
+    }
+
+    sealed record OpsToolChoice(string Id, string Label);
+
+    void BindOpsToolCombos()
+    {
+        var tools = new List<OpsToolChoice>();
+        foreach (var t in ToolCatalog.DefaultPresets)
+            tools.Add(new OpsToolChoice(t.ToolId, $"{t.ToolId}  Ø{t.DiameterMm:0.##}  {t.Name}"));
+        foreach (var t in _library.Tools)
+        {
+            if (tools.Any(x => x.Id.Equals(t.Id, StringComparison.OrdinalIgnoreCase))) continue;
+            tools.Add(new OpsToolChoice(t.Id, $"{t.Id}  Ø{t.DiameterMm:0.##}  {t.Name}"));
+        }
+        _syncingOpsStrategy = true;
+        ProfFirstTool.ItemsSource = tools;
+        ProfFirstTool.DisplayMemberPath = nameof(OpsToolChoice.Label);
+        ProfFirstTool.SelectedValuePath = nameof(OpsToolChoice.Id);
+        ProfLastTool.ItemsSource = tools;
+        ProfLastTool.DisplayMemberPath = nameof(OpsToolChoice.Label);
+        ProfLastTool.SelectedValuePath = nameof(OpsToolChoice.Id);
+        ProfFirstTool.SelectedValue = "T2";
+        ProfLastTool.SelectedValue = "T2";
+        _syncingOpsStrategy = false;
+    }
+
+    void OnProfileToolChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ReadProfileFields();
+        RegenerateNcFromCurrentOps();
+    }
+
+    void OnProfileFieldChanged(object sender, RoutedEventArgs e)
+    {
+        ReadProfileFields();
+        RegenerateNcFromCurrentOps();
+    }
+
+    void OnClearanceFieldChanged(object sender, RoutedEventArgs e)
+    {
+        ReadClearanceFields();
+        RegenerateNcFromCurrentOps();
+    }
+
+    void OnDrillFieldChanged(object sender, RoutedEventArgs e)
+    {
+        ReadDrillFields();
+        RegenerateNcFromCurrentOps();
+    }
+
+    void OnOpsHomeXyClick(object sender, RoutedEventArgs e)
+    {
+        _homeXyAtEnd = OpsHomeXyChk.IsChecked == true;
+        RegenerateNcFromCurrentOps();
+    }
+
+    void OnDrillThresholdChanged(object sender, RoutedEventArgs e)
+    {
+        ReadDrillFields();
+        if (_opsOverlay.Count == 0) return;
+        RebuildOpsOverlay();
+        CanvasHost.InvalidateVisual();
+    }
+
+    void ReadDrillFields()
+    {
+        if (_syncingOpsStrategy) return;
+        _drillPlunge = ParseMm(DrillPlunge.Text, TroyRecipe.PlungeFeedMmMin);
+        _drillRpm = ParseMm(DrillRpm.Text, TroyRecipe.SpindleRpm);
+        _drillThrough = ParseSigned(DrillThrough.Text, TroyRecipe.ThroughZMm);
+        _drillMaxExclusive = ClearanceToolPick.NormalizeDrillMaxExclusiveMm(
+            ParseMm(DrillMaxExclusive.Text, ClearanceToolPick.DrillMaxExclusiveMm));
+    }
+
+    PostRecipe CurrentPostRecipe()
+    {
+        ReadProfileFields();
+        ReadClearanceFields();
+        ReadDrillFields();
+        _homeXyAtEnd = OpsHomeXyChk.IsChecked == true;
+        return new PostRecipe
+        {
+            SafeZMm = TroyRecipe.SafeZMm,
+            Z0IsBoardBottom = true,
+            TongueFeed = _tongueFeed,
+            TongueRpm = _tongueRpm,
+            TonguePlunge = _tonguePlunge,
+            ClearanceFeed = _clrFeed,
+            ClearanceRpm = _clrRpm,
+            ClearancePlunge = _clrPlunge,
+            ProfileFirstFeed = _profFirstFeed,
+            ProfileFirstRpm = _profFirstRpm,
+            ProfileFirstPlunge = _profFirstPlunge,
+            ProfileFirstRamp45 = _profFirstRamp45,
+            ProfileFirstLeaveMm = _profFirstLeave,
+            ProfileLastFeed = _profLastFeed,
+            ProfileLastRpm = _profLastRpm,
+            ProfileLastPlunge = _profLastPlunge,
+            ProfileThroughZMm = _profLastThrough,
+            DrillPlunge = _drillPlunge,
+            DrillRpm = _drillRpm,
+            DrillThroughZMm = _drillThrough,
+            HomeXyAtEnd = _homeXyAtEnd,
+            Bridges = _profileBridges.ToList(),
+        };
+    }
+
+    void OnClearanceThresholdChanged(object sender, RoutedEventArgs e)
+    {
+        ReadClearanceFields();
+        if (_opsOverlay.Count == 0) return;
+        RebuildOpsOverlay();
+        CanvasHost.InvalidateVisual();
+    }
+
+    void ReadClearanceFields()
+    {
+        if (_syncingOpsStrategy) return;
+        _clrFeed = ParseMm(ClrFeed.Text, TroyRecipe.WorkFirstFeedMmMin);
+        _clrRpm = ParseMm(ClrRpm.Text, TroyRecipe.SpindleRpm);
+        _clrPlunge = ParseMm(ClrPlunge.Text, TroyRecipe.PlungeFeedMmMin);
+        _clrLargeMinShort = ClearanceToolPick.NormalizeLargeMinShortMm(
+            ParseMm(ClrLargeMinShort.Text, ClearanceToolPick.LargeMinShortMm));
+    }
+
+    void ReadProfileFields()
+    {
+        if (_syncingOpsStrategy) return;
+        _profFirstTool = ProfFirstTool.SelectedValue as string ?? "T2";
+        _profLastTool = ProfLastTool.SelectedValue as string ?? "T2";
+        _profFirstFeed = ParseMm(ProfFirstFeed.Text, 12000);
+        _profFirstRpm = ParseMm(ProfFirstRpm.Text, 14500);
+        _profFirstPlunge = ParseMm(ProfFirstPlunge.Text, 1000);
+        _profFirstRamp45 = ProfFirstRamp45.IsChecked == true;
+        _profFirstLeave = ParseMm(ProfFirstLeave.Text, 0.5);
+        _profLastFeed = ParseMm(ProfLastFeed.Text, 20000);
+        _profLastRpm = ParseMm(ProfLastRpm.Text, 14500);
+        _profLastPlunge = ParseMm(ProfLastPlunge.Text, 1000);
+        _profLastThrough = ParseSigned(ProfLastThrough.Text, -0.55);
+        _tongueFeed = ParseMm(TongueFeed.Text, TroyRecipe.TongueFeedMmMin);
+        _tongueRpm = ParseMm(TongueRpm.Text, TroyRecipe.SpindleRpm);
+        _tonguePlunge = ParseMm(TonguePlunge.Text, TroyRecipe.PlungeFeedMmMin);
+        _homeXyAtEnd = OpsHomeXyChk.IsChecked == true;
+        _profBridgeWidth = ParseMm(ProfBridgeWidth.Text, ProfileBridgePlanner.DefaultWidthMm);
+        if (_profBridgeWidth > 80) _profBridgeWidth = 80;
+        _profTinyAreaM2 = ParseMm(ProfBridgeTinyArea.Text, ProfileBridgePlanner.TinyAreaM2);
+        _profLargeAreaM2 = ParseMm(ProfBridgeLargeArea.Text, ProfileBridgePlanner.LargeAreaM2);
+        (_profTinyAreaM2, _profLargeAreaM2) = ProfileBridgePlanner.NormalizeAreaLimits(
+            _profTinyAreaM2, _profLargeAreaM2);
+        _profStripAspect = ProfileBridgePlanner.NormalizeStripAspect(
+            ParseMm(ProfBridgeStripAspect.Text, ProfileBridgePlanner.StripAspect));
+        foreach (var i in Enumerable.Range(0, _profileBridges.Count).ToList())
+            _profileBridges[i] = _profileBridges[i] with { WidthMm = _profBridgeWidth };
+    }
+
+    IReadOnlyList<CutOp> FocusedOps() =>
+        _opsOverlay.Where(o => _opsStrategy is null || CamStrategy.Classify(o) == _opsStrategy).ToList();
+
+    const double OpsIconRailW = 88;
+    const double OpsParamsW = 300;
+
+    void ApplyOpsChrome()
+    {
+        var open = _opsStrategy is not null;
+        OpsParamsPane.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        NcCol.Width = new GridLength(open ? OpsIconRailW + OpsParamsW : OpsIconRailW);
+        OpsParamsProfile.Visibility = _opsStrategy is CamStrategyKind.Profile ? Visibility.Visible : Visibility.Collapsed;
+        OpsParamsClearance.Visibility = _opsStrategy is CamStrategyKind.AreaClearance ? Visibility.Visible : Visibility.Collapsed;
+        OpsParamsDrill.Visibility = _opsStrategy is CamStrategyKind.Drilling ? Visibility.Visible : Visibility.Collapsed;
+        OpsParamsTitle.Text = _opsStrategy switch
+        {
+            CamStrategyKind.Profile => "Profiling",
+            CamStrategyKind.AreaClearance => "Area Clearance",
+            CamStrategyKind.Drilling => "Drilling",
+            _ => "刀路参数",
+        };
+        _opsFocus = _opsStrategy switch
+        {
+            CamStrategyKind.Profile => TroyPassKind.ProfileFirst,
+            CamStrategyKind.AreaClearance => TroyPassKind.Clearance,
+            CamStrategyKind.Drilling => TroyPassKind.Drilling,
+            _ => null,
+        };
+        _syncingOpsIcons = true;
+        OpsIconProfile.IsChecked = _opsStrategy is CamStrategyKind.Profile;
+        OpsIconClearance.IsChecked = _opsStrategy is CamStrategyKind.AreaClearance;
+        OpsIconDrill.IsChecked = _opsStrategy is CamStrategyKind.Drilling;
+        _syncingOpsIcons = false;
+    }
+
+    void OnOpsToolpathIconClick(object sender, RoutedEventArgs e)
+    {
+        if (_syncingOpsIcons) return;
+        if (sender is not ToggleButton btn || btn.Tag is not string tag
+            || !Enum.TryParse<CamStrategyKind>(tag, out var kind))
+            return;
+        _opsStrategy = btn.IsChecked == true ? kind : null;
+        ApplyOpsChrome();
+        RefreshOpsRail();
+        RefreshCamFrames();
+        CanvasHost.InvalidateVisual();
+    }
+
+    void SyncStrategyCheckboxes()
+    {
+        _syncingOpsStrategy = true;
+        OpsTongueChk.IsChecked = _enableTongue;
+        OpsProfileChk.IsChecked = _enableProfile;
+        OpsProfileLastChk.IsChecked = _enableProfileLast;
+        OpsBridgeChk.IsChecked = _enableBridges;
+        OpsClearanceChk.IsChecked = _enableClearance;
+        OpsDrillChk.IsChecked = _enableDrilling;
+        RouteTongueChk.IsChecked = _enableTongue;
+        RouteContourChk.IsChecked = _enableProfile && _enableProfileLast;
+        RouteGrooveChk.IsChecked = _enableClearance;
+        RouteDrillChk.IsChecked = _enableDrilling;
+        _syncingOpsStrategy = false;
+    }
+
+    void OnOpsMachineChanged(object sender, SelectionChangedEventArgs e) =>
+        SyncMachineSelection(OpsMachineCombo.SelectedValue as string);
+
+    void OnOpsCalculateCurrentClick(object sender, RoutedEventArgs e) =>
+        CalculateOps(allSheets: false);
+
+    void OnOpsCalculateAllClick(object sender, RoutedEventArgs e) =>
+        CalculateOps(allSheets: true);
+
+    void OnProfBridgeManualClick(object sender, RoutedEventArgs e)
+    {
+        if (_stage != "ops")
+        {
+            SetStatus("请到刀路页使用手动布桥");
+            return;
+        }
+        _bridgeManualMode = !_bridgeManualMode;
+        if (_bridgeManualMode)
+        {
+            _bridgeDeleteMode = false;
+            _opsStrategy = CamStrategyKind.Profile;
+            ApplyOpsChrome();
+            CanvasHost.InvalidateVisual();
+        }
+        ApplyBridgeModeChrome();
+        SetStatus(_bridgeManualMode
+            ? "手动模式中 · 点外形刀路轨迹放桥"
+            : "已退出手动模式");
+    }
+
+    void OnProfBridgeAutoClick(object sender, RoutedEventArgs e)
+    {
+        if (_stage != "ops")
+        {
+            SetStatus("请到刀路页使用自动布桥");
+            return;
+        }
+        if (!_opsOverlay.Any(o => o.Op == "contour" && o.Placed))
+        {
+            SetStatus("请先计算刀路");
+            return;
+        }
+        ReadProfileFields();
+        var result = ProfileBridgePlanner.AutoPlace(
+            _profileBridges,
+            _opsOverlay,
+            CurrentSheetOutlines(),
+            _activeNestSheet,
+            LastProfileToolDiameterMm(),
+            _profBridgeWidth,
+            _profTinyAreaM2,
+            _profLargeAreaM2,
+            _profStripAspect);
+        if (result.Changed)
+        {
+            _profileBridges.Clear();
+            _profileBridges.AddRange(result.Bridges);
+            RefreshBridgeCount();
+            CanvasHost.InvalidateVisual();
+        }
+        SetStatus(result.Message);
+    }
+
+    void OnProfBridgeAutoAllClick(object sender, RoutedEventArgs e)
+    {
+        if (_stage != "ops")
+        {
+            SetStatus("请到刀路页使用批量自动布桥");
+            return;
+        }
+        if (_session.Package is null || _nest is not { Ok: true })
+        {
+            SetStatus("请先完成密排");
+            return;
+        }
+        ReadProfileFields();
+        var nestSheets = _nest.Placements.Select(p => p.SheetIndex).Distinct().ToHashSet();
+        var opSheets = _opsOverlay
+            .Where(o => o.Op == "contour" && o.Placed)
+            .Select(o => o.SheetIndex)
+            .ToHashSet();
+        if (nestSheets.Count == 0 || !nestSheets.IsSubsetOf(opSheets))
+            CalculateOps(allSheets: true);
+        if (!_opsOverlay.Any(o => o.Op == "contour" && o.Placed))
+        {
+            SetStatus("请先计算刀路");
+            return;
+        }
+        var result = ProfileBridgePlanner.AutoPlaceAll(
+            _profileBridges,
+            _opsOverlay,
+            AllSheetOutlines(),
+            LastProfileToolDiameterMm(),
+            _profBridgeWidth,
+            _profTinyAreaM2,
+            _profLargeAreaM2,
+            _profStripAspect);
+        if (result.Changed)
+        {
+            _profileBridges.Clear();
+            _profileBridges.AddRange(result.Bridges);
+            RefreshBridgeCount();
+            CanvasHost.InvalidateVisual();
+        }
+        SetStatus(result.Message);
+    }
+
+    void OnProfBridgeClearClick(object sender, RoutedEventArgs e)
+    {
+        if (_stage != "ops")
+        {
+            SetStatus("请到刀路页清空桥");
+            return;
+        }
+        var result = ProfileBridgePlanner.ClearSheet(_profileBridges, _activeNestSheet);
+        if (result.Changed)
+        {
+            _profileBridges.Clear();
+            _profileBridges.AddRange(result.Bridges);
+            RefreshBridgeCount();
+            CanvasHost.InvalidateVisual();
+        }
+        SetStatus(result.Message);
+    }
+
+    void OnProfBridgeDeleteClick(object sender, RoutedEventArgs e)
+    {
+        if (_stage != "ops")
+        {
+            SetStatus("请到刀路页删除桥");
+            return;
+        }
+        _bridgeDeleteMode = !_bridgeDeleteMode;
+        if (_bridgeDeleteMode)
+        {
+            _bridgeManualMode = false;
+            _opsStrategy = CamStrategyKind.Profile;
+            ApplyOpsChrome();
+            CanvasHost.InvalidateVisual();
+        }
+        ApplyBridgeModeChrome();
+        SetStatus(_bridgeDeleteMode
+            ? "删除中 · 点桥标记去掉，成对一起删"
+            : "已退出删除");
+    }
+
+    void ApplyBridgeModeChrome()
+    {
+        if (_bridgeManualMode)
+        {
+            ProfBridgeManualBtn.Content = "手动模式中";
+            ProfBridgeManualBtn.Background = new SolidColorBrush(Color.FromRgb(0xC4, 0x5C, 0x26));
+            ProfBridgeManualBtn.Foreground = Brushes.White;
+            ProfBridgeManualBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(0x8E, 0x3B, 0x12));
+        }
+        else
+        {
+            ProfBridgeManualBtn.Content = "手动模式";
+            ProfBridgeManualBtn.Background = Brushes.White;
+            ProfBridgeManualBtn.Foreground = Brushes.Black;
+            ProfBridgeManualBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA));
+        }
+
+        if (_bridgeDeleteMode)
+        {
+            ProfBridgeDeleteBtn.Content = "删除中";
+            ProfBridgeDeleteBtn.Background = new SolidColorBrush(Color.FromRgb(0xB0, 0x3A, 0x2E));
+            ProfBridgeDeleteBtn.Foreground = Brushes.White;
+            ProfBridgeDeleteBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(0x7B, 0x24, 0x1C));
+        }
+        else
+        {
+            ProfBridgeDeleteBtn.Content = "删除桥";
+            ProfBridgeDeleteBtn.Background = Brushes.White;
+            ProfBridgeDeleteBtn.Foreground = Brushes.Black;
+            ProfBridgeDeleteBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA));
+        }
+    }
+
+    void ApplyBridgeManualChrome() => ApplyBridgeModeChrome();
+
+    void ExitBridgeModes()
+    {
+        if (!_bridgeManualMode && !_bridgeDeleteMode) return;
+        _bridgeManualMode = false;
+        _bridgeDeleteMode = false;
+        ApplyBridgeModeChrome();
+    }
+
+    void ExitBridgeManualMode() => ExitBridgeModes();
+
+    void ResetProfileBridges()
+    {
+        _profileBridges.Clear();
+        RefreshBridgeCount();
+    }
+
+    void RefreshBridgeCount()
+    {
+        var n = _profileBridges.Count;
+        var paired = _profileBridges.Count(b => b.PairId is not null);
+        ProfBridgeCount.Text = n == 0
+            ? ""
+            : $"已放 {n} 个" + (paired > 0 ? $"（成对 {paired}）" : "");
+    }
+
+    double LastProfileToolDiameterMm()
+    {
+        var op = new CutOp { Op = "contour", PanelId = "_", ToolId = _profLastTool };
+        var d = ToolDiameterOf(op);
+        return d > 0 ? d : TroyRecipe.WorkDiameterMm;
+    }
+
+    Dictionary<string, IReadOnlyList<Point2>> CurrentSheetOutlines() =>
+        SheetOutlines(_activeNestSheet);
+
+    Dictionary<string, IReadOnlyList<Point2>> AllSheetOutlines() =>
+        SheetOutlines(null);
+
+    Dictionary<string, IReadOnlyList<Point2>> SheetOutlines(int? sheetIndex)
+    {
+        var map = new Dictionary<string, IReadOnlyList<Point2>>(StringComparer.Ordinal);
+        if (_nest is not { Ok: true } || _session.Package is null) return map;
+        var byId = _session.Package.Panels.ToDictionary(p => p.PanelId, StringComparer.Ordinal);
+        foreach (var place in _nest.Placements.Where(p => sheetIndex is null || p.SheetIndex == sheetIndex))
+        {
+            if (!byId.TryGetValue(place.PanelId, out var panel)) continue;
+            if (panel.Outline.Points.Count < 2) continue;
+            map[place.PanelId] = NestTransform.SheetOutline(
+                panel, place.OffsetX, place.OffsetY, place.RotationDeg);
+        }
+        return map;
+    }
+
+    bool TryHandleBridgeManualClick(float sx, float sy)
+    {
+        if (!_opsOverlay.Any(o => o.Op == "contour" && o.Placed))
+        {
+            SetStatus("请先计算刀路");
+            return true;
+        }
+        EnsureNestViewMetrics();
+        var (mx, my) = ScreenToSheet(sx, sy);
+        var scale = Math.Max(0.01, _nestScale);
+        var hitTol = Math.Max(8, 14.0 / scale);
+        var symbolTol = Math.Max(3.5, 9.0 / scale);
+        ReadProfileFields();
+        var result = ProfileBridgePlanner.HandleClick(
+            _profileBridges,
+            _opsOverlay,
+            CurrentSheetOutlines(),
+            _activeNestSheet,
+            mx,
+            my,
+            LastProfileToolDiameterMm(),
+            _profBridgeWidth,
+            hitTol,
+            symbolTol);
+        if (result.Changed)
+        {
+            _profileBridges.Clear();
+            _profileBridges.AddRange(result.Bridges);
+            RefreshBridgeCount();
+            CanvasHost.InvalidateVisual();
+        }
+        SetStatus(result.Message + (_profileBridges.Count > 0 ? $" · 共 {_profileBridges.Count} 个" : ""));
+        return true;
+    }
+
+    bool TryHandleBridgeDeleteClick(float sx, float sy)
+    {
+        EnsureNestViewMetrics();
+        var (mx, my) = ScreenToSheet(sx, sy);
+        var scale = Math.Max(0.01, _nestScale);
+        var symbolTol = Math.Max(3.5, 9.0 / scale);
+        var result = ProfileBridgePlanner.HandleDelete(
+            _profileBridges, _activeNestSheet, mx, my, symbolTol);
+        if (result.Changed)
+        {
+            _profileBridges.Clear();
+            _profileBridges.AddRange(result.Bridges);
+            RefreshBridgeCount();
+            CanvasHost.InvalidateVisual();
+        }
+        SetStatus(result.Message + (_profileBridges.Count > 0 ? $" · 剩 {_profileBridges.Count} 个" : ""));
+        return true;
+    }
+
+    void CalculateOps(bool allSheets)
+    {
+        if (_session.Package is null || _nest is not { Ok: true })
+        {
+            SetStatus("刀路：请先完成密排");
+            return;
+        }
+        _opsAllSheets = allSheets;
+        RebuildOpsOverlay();
+        CanvasHost.InvalidateVisual();
+        SetStatus(allSheets
+            ? $"已计算全部大板 · {_opsSummary}"
+            : $"已计算当前大板 {_activeNestSheet + 1} · {_opsSummary}");
+    }
+
+    void OnOpsCalculateClick(object sender, RoutedEventArgs e) =>
+        CalculateOps(allSheets: false);
 
     void RefreshCamFrames()
     {
-        _camFrames = CamSimulator.ExpandFrames(_opsOverlay);
+        var ops = FocusedOps();
+        _camFrames = CamSimulator.ExpandFrames(ops);
         _camFrameIndex = _camFrames.Count == 0
             ? 0
             : Math.Clamp(_camFrameIndex, 0, _camFrames.Count - 1);
-        RefreshCamMeta();
-    }
-
-    void RefreshCamMeta()
-    {
-        var frame = _camFrames.Count == 0 ? null : _camFrames[_camFrameIndex];
-        CamSimMeta.Text = CamSimulator.Describe(frame, _camFrameIndex, _camFrames.Count);
     }
 
     void StepCam(int delta)
@@ -1009,37 +1954,104 @@ public partial class MainWindow : Window
         if (_camFrames.Count == 0)
         {
             _camTimer.Stop();
-            CamPlayBtn.Content = "播放";
             return;
         }
         _camFrameIndex = CamSimulator.Step(_camFrameIndex, _camFrames.Count, delta);
-        RefreshCamMeta();
         CanvasHost.InvalidateVisual();
     }
 
-    void OnCamPrevClick(object sender, RoutedEventArgs e) => StepCam(-1);
-
-    void OnCamNextClick(object sender, RoutedEventArgs e) => StepCam(1);
-
-    void OnCamPlayClick(object sender, RoutedEventArgs e)
+    void OnNestStabilizeClick(object sender, RoutedEventArgs e)
     {
-        if (_camTimer.IsEnabled)
+        var (sw, sh, _) = ActiveSheetMetrics();
+        var borderMm = ActiveSheetBorderMm();
+        var spacingMm = ActiveSheetSpacingMm();
+        UsageLog.LogEvent("ui", "desktop.nestStabilize.click", new Dictionary<string, object?>
         {
-            _camTimer.Stop();
-            CamPlayBtn.Content = "播放";
-        }
-        else
-        {
-            _camTimer.Start();
-            CamPlayBtn.Content = "暂停";
-        }
-    }
+            ["sheetIndex"] = _activeNestSheet,
+            ["sheetLabel"] = $"大板 {_activeNestSheet + 1}",
+            ["sheetW"] = sw,
+            ["sheetH"] = sh,
+            ["borderMm"] = borderMm,
+            ["spacingMm"] = spacingMm,
+            ["hasPackage"] = _session.Package is not null,
+            ["nestOk"] = _nest is { Ok: true },
+            ["placementCount"] = _nest?.Placements.Count ?? 0,
+            ["lockedCount"] = _locked.Count,
+            ["partInPartSlots"] = _partInPartSlots.Count,
+        });
 
-    void OnCamOffsetChanged(object sender, RoutedEventArgs e)
-    {
-        RebuildOpsOverlay();
-        RegenerateNcFromCurrentOps();
+        if (_session.Package is null || _nest is not { Ok: true })
+        {
+            const string skip = "密排优化：请先完成密排";
+            UsageLog.LogEvent("ui", "desktop.nestStabilize.result", new Dictionary<string, object?>
+            {
+                ["ok"] = false,
+                ["improved"] = false,
+                ["message"] = skip,
+                ["why"] = "no-nest",
+            });
+            SetStatus(skip);
+            return;
+        }
+
+        var frozen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var slot in _partInPartSlots)
+        {
+            frozen.Add(slot.HostPanelId);
+            frozen.Add(slot.ChildPanelId);
+        }
+
+        var result = SheetStabilityOptimizer.Optimize(
+            _session.Package.Panels,
+            CurrentNestPlacements(),
+            _activeNestSheet,
+            sw,
+            sh,
+            borderMm,
+            spacingMm,
+            _locked,
+            frozen,
+            _partInPartSlots);
+
+        UsageLog.LogEvent("ui", "desktop.nestStabilize.result", new Dictionary<string, object?>
+        {
+            ["ok"] = result.Improved,
+            ["improved"] = result.Improved,
+            ["movedCount"] = result.MovedCount,
+            ["stripMoved"] = result.StripMoved,
+            ["largeMoved"] = result.LargeMoved,
+            ["pipMoved"] = result.PipMoved,
+            ["stripCount"] = result.StripCount,
+            ["columnCount"] = result.ColumnCount,
+            ["startScore"] = result.StartScore,
+            ["endScore"] = result.EndScore,
+            ["message"] = result.Message,
+            ["reasons"] = result.Reasons.ToList(),
+            ["sheetIndex"] = _activeNestSheet,
+        });
+
+        if (!result.Improved)
+        {
+            SetStatus($"大板 {_activeNestSheet + 1}: {result.Message}");
+            return;
+        }
+
+        var byId = result.Placements.ToDictionary(p => p.PanelId, StringComparer.Ordinal);
+        foreach (var place in _nest.Placements)
+        {
+            if (!byId.TryGetValue(place.PanelId, out var next)) continue;
+            place.SheetIndex = next.SheetIndex;
+            place.OffsetX = next.OffsetX;
+            place.OffsetY = next.OffsetY;
+            place.RotationDeg = next.RotationDeg;
+        }
+
+        _guillotineBySheet.Remove(_activeNestSheet);
+        if (_opsOverlay.Count > 0)
+            RebuildOpsOverlay();
+        RefreshNestReport();
         CanvasHost.InvalidateVisual();
+        SetStatus($"大板 {_activeNestSheet + 1}: {result.Message}");
     }
 
     void OnNestGuillotineClick(object sender, RoutedEventArgs e)
@@ -1126,7 +2138,8 @@ public partial class MainWindow : Window
             return;
         }
         var report = RunPreflight();
-        PreflightMeta.Text = NcPreflight.Format(report);
+        var text = NcPreflight.Format(report);
+        PreflightMeta.Text = text;
         PreflightMeta.Foreground = report.Ok
             ? new SolidColorBrush(Color.FromRgb(0x88, 0xCC, 0x88))
             : new SolidColorBrush(Color.FromRgb(0xE0, 0x88, 0x88));
@@ -1173,6 +2186,28 @@ public partial class MainWindow : Window
         _partInPartSlots.Count == 0
             ? null
             : PartsInPartPacker.IgnoreCollisionPairs(_partInPartSlots);
+
+    (double Ox, double Oy) ClampPipChild(
+        string childId,
+        PanelPart child,
+        double ox,
+        double oy,
+        double rotDeg)
+    {
+        var slot = _partInPartSlots.FirstOrDefault(s =>
+            s.Enabled && string.Equals(s.ChildPanelId, childId, StringComparison.Ordinal));
+        if (slot is null || _session.Package is null || _nest is not { Ok: true })
+            return (ox, oy);
+        var hostPlace = _nest.Placements.FirstOrDefault(p => p.PanelId == slot.HostPanelId);
+        var host = _session.Package.Panels.FirstOrDefault(p => p.PanelId == slot.HostPanelId);
+        if (hostPlace is null || host is null) return (ox, oy);
+        var gap = ParseMm(NestSpacingBox.Text, 12);
+        if (!PartsInPartPacker.TryUsableVoid(
+                host, hostPlace.OffsetX, hostPlace.OffsetY, hostPlace.RotationDeg,
+                slot.FeatureId, gap, out var vx, out var vy, out var vw, out var vh))
+            return (ox, oy);
+        return NestDrag.ClampInBounds(child, ox, oy, rotDeg, vx, vy, vx + vw, vy + vh);
+    }
 
     void SyncNestSettingsFromPackage()
     {
@@ -1291,6 +2326,307 @@ public partial class MainWindow : Window
             ? v
             : fallback;
 
+    static double ParseSigned(string? text, double fallback) =>
+        double.TryParse(text, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var v)
+            ? v
+            : fallback;
+
+    static string CamBox(double v) =>
+        v.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+
+    void ClearManufacturingState()
+    {
+        _nest = null;
+        _nestSheetsUsed = [];
+        _partInPartSlots = [];
+        _guillotineBySheet.Clear();
+        _nestHolding.Clear();
+        _holdingLayout = [];
+        _holdingRegions = [];
+        _activeNestSheet = 0;
+        _showNest = false;
+        _opsOverlay = [];
+        _exportFiles = [];
+        _exportSelected = null;
+        _opsAllSheets = true;
+        NcPreview.Text = "";
+        ResetProfileBridges();
+        ExitBridgeModes();
+        _locked.Clear();
+    }
+
+    ProjectSessionState CaptureProjectSession()
+    {
+        ReadProfileFields();
+        ReadClearanceFields();
+        ReadDrillFields();
+        _homeXyAtEnd = OpsHomeXyChk.IsChecked == true;
+        return new ProjectSessionState
+        {
+            Stage = _stage,
+            ActiveNestSheet = _activeNestSheet,
+            OpsAllSheets = _opsAllSheets,
+            ShowNest = _showNest,
+            NestEngine = _nest?.Engine,
+            NestEnginePreference = (NestEngineCombo.SelectedItem as ComboBoxItem)?.Tag as string,
+            NestSheetCount = _nest?.SheetCount ?? _nestSheetsUsed.Count,
+            SelectedExportFile = _exportSelected?.FileName,
+            Unplaced = _nest?.Unplaced.ToList() ?? [],
+            LockedPanelIds = _locked.ToList(),
+            NestSheetsUsed = _nestSheetsUsed.Select(ProjectSessionCodec.FromSheet).ToList(),
+            StockKinds = _stockKinds.Select(k => new StockKindDto
+            {
+                MaterialId = k.MaterialId,
+                Label = k.Label,
+                ThicknessMm = k.ThicknessMm,
+                WidthMm = k.WidthMm,
+                LengthMm = k.LengthMm,
+                SpacingMm = k.SpacingMm,
+                BorderMm = k.BorderMm,
+                AllowRotate90 = k.AllowRotate90,
+                AllowPartsInPart = k.AllowPartsInPart,
+            }).ToList(),
+            Holding = _nestHolding.Select(h => new HeldPartDto
+            {
+                PanelId = h.PanelId,
+                Material = h.Material,
+                ThicknessMm = h.ThicknessMm,
+                RotationDeg = h.RotationDeg,
+                WidthMm = h.WidthMm,
+                HeightMm = h.HeightMm,
+            }).ToList(),
+            PartInPart = _partInPartSlots.Select(s => new PartInPartDto
+            {
+                HostPanelId = s.HostPanelId,
+                ChildPanelId = s.ChildPanelId,
+                FeatureId = s.FeatureId,
+                SheetIndex = s.SheetIndex,
+                Enabled = s.Enabled,
+            }).ToList(),
+            Guillotine = _guillotineBySheet.Select(kv => new GuillotineDto
+            {
+                SheetIndex = kv.Key,
+                Kind = kv.Value.Kind,
+                Label = kv.Value.Label,
+                RemnantAreaMm2 = kv.Value.RemnantAreaMm2,
+                RemnantMinEdgeMm = kv.Value.RemnantMinEdgeMm,
+                Polyline = kv.Value.Polyline.Select(p => new XyDto { X = p.X, Y = p.Y }).ToList(),
+            }).ToList(),
+            Cam = new ProjectCamSettings
+            {
+                EnableTongue = _enableTongue,
+                EnableProfile = _enableProfile,
+                EnableProfileLast = _enableProfileLast,
+                EnableClearance = _enableClearance,
+                EnableBridges = _enableBridges,
+                EnableDrilling = _enableDrilling,
+                HomeXyAtEnd = _homeXyAtEnd,
+                ProfFirstTool = _profFirstTool,
+                ProfLastTool = _profLastTool,
+                ProfFirstFeed = _profFirstFeed,
+                ProfFirstRpm = _profFirstRpm,
+                ProfFirstPlunge = _profFirstPlunge,
+                ProfFirstRamp45 = _profFirstRamp45,
+                ProfFirstLeave = _profFirstLeave,
+                ProfLastFeed = _profLastFeed,
+                ProfLastRpm = _profLastRpm,
+                ProfLastPlunge = _profLastPlunge,
+                ProfLastThrough = _profLastThrough,
+                TongueFeed = _tongueFeed,
+                TongueRpm = _tongueRpm,
+                TonguePlunge = _tonguePlunge,
+                ProfBridgeWidth = _profBridgeWidth,
+                ProfTinyAreaM2 = _profTinyAreaM2,
+                ProfLargeAreaM2 = _profLargeAreaM2,
+                ProfStripAspect = _profStripAspect,
+                ClrFeed = _clrFeed,
+                ClrRpm = _clrRpm,
+                ClrPlunge = _clrPlunge,
+                ClrLargeMinShort = _clrLargeMinShort,
+                DrillPlunge = _drillPlunge,
+                DrillRpm = _drillRpm,
+                DrillThrough = _drillThrough,
+                DrillMaxExclusive = _drillMaxExclusive,
+            },
+            Bridges = _profileBridges.Select(ProjectSessionCodec.FromBridge).ToList(),
+            Ops = _opsOverlay.Select(ProjectSessionCodec.FromOp).ToList(),
+        };
+    }
+
+    void ApplyProjectSession(ProjectSessionState state)
+    {
+        ApplyCamSettings(state.Cam);
+        if (!string.IsNullOrWhiteSpace(state.NestEnginePreference))
+        {
+            foreach (var item in NestEngineCombo.Items.OfType<ComboBoxItem>())
+            {
+                if (string.Equals(item.Tag as string, state.NestEnginePreference, StringComparison.OrdinalIgnoreCase))
+                {
+                    NestEngineCombo.SelectedItem = item;
+                    break;
+                }
+            }
+        }
+
+        _stockKinds.Clear();
+        foreach (var k in state.StockKinds)
+        {
+            _stockKinds.Add(new StockMaterialKindVm
+            {
+                MaterialId = k.MaterialId,
+                Label = string.IsNullOrWhiteSpace(k.Label) ? k.MaterialId : k.Label,
+                ThicknessMm = k.ThicknessMm,
+                PanelCount = 0,
+                WidthMmText = CamBox(k.WidthMm),
+                LengthMmText = CamBox(k.LengthMm),
+                SpacingMmText = CamBox(k.SpacingMm),
+                BorderMmText = CamBox(k.BorderMm),
+                AllowRotate90 = k.AllowRotate90,
+                AllowPartsInPart = k.AllowPartsInPart,
+            });
+        }
+
+        _opsAllSheets = state.OpsAllSheets;
+        _activeNestSheet = Math.Max(0, state.ActiveNestSheet);
+        _nestSheetsUsed = state.NestSheetsUsed.Select(ProjectSessionCodec.ToSheet).ToList();
+        _partInPartSlots = state.PartInPart.Select(s => new PartInPartSlot
+        {
+            HostPanelId = s.HostPanelId,
+            ChildPanelId = s.ChildPanelId,
+            FeatureId = s.FeatureId,
+            SheetIndex = s.SheetIndex,
+            Enabled = s.Enabled,
+        }).ToList();
+        _guillotineBySheet.Clear();
+        foreach (var g in state.Guillotine)
+        {
+            _guillotineBySheet[g.SheetIndex] = new GuillotineCutPlanner.Result
+            {
+                Kind = g.Kind,
+                Label = g.Label,
+                RemnantAreaMm2 = g.RemnantAreaMm2,
+                RemnantMinEdgeMm = g.RemnantMinEdgeMm,
+                Polyline = g.Polyline.Select(p => (p.X, p.Y)).ToList(),
+            };
+        }
+        _nestHolding.Clear();
+        foreach (var h in state.Holding)
+        {
+            _nestHolding.Add(new HeldNestPart
+            {
+                PanelId = h.PanelId,
+                Material = h.Material,
+                ThicknessMm = h.ThicknessMm,
+                RotationDeg = h.RotationDeg,
+                WidthMm = h.WidthMm,
+                HeightMm = h.HeightMm,
+            });
+        }
+        _locked.Clear();
+        foreach (var id in state.LockedPanelIds.Where(x => !string.IsNullOrWhiteSpace(x)))
+            _locked.Add(id);
+
+        _profileBridges.Clear();
+        _profileBridges.AddRange(state.Bridges.Select(ProjectSessionCodec.ToBridge));
+        _opsOverlay = state.Ops.Select(ProjectSessionCodec.ToOp).ToList();
+    }
+
+    void ApplyCamSettings(ProjectCamSettings cam)
+    {
+        _enableTongue = cam.EnableTongue;
+        _enableProfile = cam.EnableProfile;
+        _enableProfileLast = cam.EnableProfileLast;
+        _enableClearance = cam.EnableClearance;
+        _enableBridges = cam.EnableBridges;
+        _enableDrilling = cam.EnableDrilling;
+        _homeXyAtEnd = cam.HomeXyAtEnd;
+        _profFirstTool = string.IsNullOrWhiteSpace(cam.ProfFirstTool) ? "T2" : cam.ProfFirstTool;
+        _profLastTool = string.IsNullOrWhiteSpace(cam.ProfLastTool) ? "T2" : cam.ProfLastTool;
+        _profFirstFeed = cam.ProfFirstFeed;
+        _profFirstRpm = cam.ProfFirstRpm;
+        _profFirstPlunge = cam.ProfFirstPlunge;
+        _profFirstRamp45 = cam.ProfFirstRamp45;
+        _profFirstLeave = cam.ProfFirstLeave;
+        _profLastFeed = cam.ProfLastFeed;
+        _profLastRpm = cam.ProfLastRpm;
+        _profLastPlunge = cam.ProfLastPlunge;
+        _profLastThrough = cam.ProfLastThrough;
+        _tongueFeed = cam.TongueFeed;
+        _tongueRpm = cam.TongueRpm;
+        _tonguePlunge = cam.TonguePlunge;
+        _profBridgeWidth = cam.ProfBridgeWidth;
+        _profTinyAreaM2 = cam.ProfTinyAreaM2;
+        _profLargeAreaM2 = cam.ProfLargeAreaM2;
+        _profStripAspect = cam.ProfStripAspect;
+        _clrFeed = cam.ClrFeed;
+        _clrRpm = cam.ClrRpm;
+        _clrPlunge = cam.ClrPlunge;
+        _clrLargeMinShort = cam.ClrLargeMinShort;
+        _drillPlunge = cam.DrillPlunge;
+        _drillRpm = cam.DrillRpm;
+        _drillThrough = cam.DrillThrough;
+        _drillMaxExclusive = cam.DrillMaxExclusive;
+        WriteCamToUi();
+    }
+
+    void WriteCamToUi()
+    {
+        _syncingOpsStrategy = true;
+        TongueFeed.Text = CamBox(_tongueFeed);
+        TongueRpm.Text = CamBox(_tongueRpm);
+        TonguePlunge.Text = CamBox(_tonguePlunge);
+        ProfFirstTool.SelectedValue = _profFirstTool;
+        ProfLastTool.SelectedValue = _profLastTool;
+        ProfFirstFeed.Text = CamBox(_profFirstFeed);
+        ProfFirstRpm.Text = CamBox(_profFirstRpm);
+        ProfFirstPlunge.Text = CamBox(_profFirstPlunge);
+        ProfFirstRamp45.IsChecked = _profFirstRamp45;
+        ProfFirstLeave.Text = CamBox(_profFirstLeave);
+        ProfLastFeed.Text = CamBox(_profLastFeed);
+        ProfLastRpm.Text = CamBox(_profLastRpm);
+        ProfLastPlunge.Text = CamBox(_profLastPlunge);
+        ProfLastThrough.Text = CamBox(_profLastThrough);
+        ProfBridgeWidth.Text = CamBox(_profBridgeWidth);
+        ProfBridgeTinyArea.Text = CamBox(_profTinyAreaM2);
+        ProfBridgeLargeArea.Text = CamBox(_profLargeAreaM2);
+        ProfBridgeStripAspect.Text = CamBox(_profStripAspect);
+        ClrFeed.Text = CamBox(_clrFeed);
+        ClrRpm.Text = CamBox(_clrRpm);
+        ClrPlunge.Text = CamBox(_clrPlunge);
+        ClrLargeMinShort.Text = CamBox(_clrLargeMinShort);
+        DrillPlunge.Text = CamBox(_drillPlunge);
+        DrillRpm.Text = CamBox(_drillRpm);
+        DrillThrough.Text = CamBox(_drillThrough);
+        DrillMaxExclusive.Text = CamBox(_drillMaxExclusive);
+        OpsHomeXyChk.IsChecked = _homeXyAtEnd;
+        _syncingOpsStrategy = false;
+        SyncStrategyCheckboxes();
+    }
+
+    void RestoreProjectStage(string? requested)
+    {
+        var stage = requested is "stock" or "nest" or "ops" or "out" or "load" ? requested : "load";
+        if (stage is "ops" or "out" && _opsOverlay.Count == 0)
+            stage = _nest is { Ok: true } ? "nest" : "stock";
+        if (stage is "nest" && _nest is not { Ok: true })
+            stage = "stock";
+        if (_session.Package is null)
+            stage = "load";
+        _stageChanging = true;
+        _stage = stage;
+        StageTabs.SelectedIndex = stage switch
+        {
+            "stock" => 1,
+            "nest" => 2,
+            "ops" => 3,
+            "out" => 4,
+            _ => 0,
+        };
+        _stageChanging = false;
+        _showNest = (_stage is "nest" or "ops" or "out") && _nest is { Ok: true };
+    }
+
     void TryLoadDemoPackage() => OnLoadDemoClick(this, new RoutedEventArgs());
 
     void OnLoadDemoClick(object sender, RoutedEventArgs e)
@@ -1309,15 +2645,7 @@ public partial class MainWindow : Window
             ShowImportDialog(false, "打开示例", Path.GetFileName(demo), result);
             return;
         }
-        _nest = null;
-        _nestSheetsUsed = [];
-        _partInPartSlots = [];
-        _guillotineBySheet.Clear();
-        _nestHolding.Clear();
-        _holdingLayout = [];
-        _activeNestSheet = 0;
-        _showNest = false;
-        NcPreview.Text = "";
+        ClearManufacturingState();
         _module = "production";
         HighlightModule();
         ApplyModuleVisibility();
@@ -1474,6 +2802,8 @@ public partial class MainWindow : Window
                 StockMachineCombo.SelectedValue = id;
             if (MachineComboModule.SelectedValue as string != id)
                 MachineComboModule.SelectedValue = id;
+            if (OpsMachineCombo.SelectedValue as string != id)
+                OpsMachineCombo.SelectedValue = id;
         }
         finally
         {
@@ -1621,8 +2951,11 @@ public partial class MainWindow : Window
         _guillotineBySheet.Clear();
         _nestHolding.Clear();
         _holdingLayout = [];
+        _holdingRegions = [];
         _activeNestSheet = 0;
         _opsOverlay = [];
+        ResetProfileBridges();
+        ExitBridgeManualMode();
         _showNest = false;
         NcPreview.Text = "";
         SetStatus($"已编辑 · Nest/CAM 已失效（{reason}）· 请回板材页「初始密排」");
@@ -1828,9 +3161,6 @@ public partial class MainWindow : Window
     async void OnApplyNestSettingsClick(object sender, RoutedEventArgs e) =>
         await RunNestAsync(withNc: false);
 
-    async void OnNestClick(object sender, RoutedEventArgs e) =>
-        await RunNestAsync(withNc: true);
-
     string SelectedNestEnginePreference() =>
         NestEngineCombo.SelectedItem is ComboBoxItem item
             && item.Tag is string tag
@@ -1922,7 +3252,9 @@ public partial class MainWindow : Window
             _guillotineBySheet.Clear();
             _nestHolding.Clear();
             _holdingLayout = [];
+            _holdingRegions = [];
             _activeNestSheet = 0;
+            ResetProfileBridges();
             _nest = new StartNestingReply
             {
                 Ok = true,
@@ -2068,7 +3400,7 @@ public partial class MainWindow : Window
                 {
                     var profile = ActiveProfileForCam();
                     var opsForNc = _opsOverlay.ToList();
-                    var nc = NcEmitter.OpsToNc(opsForNc, profile);
+                    var nc = NcEmitter.OpsToNc(opsForNc, profile, recipe: CurrentPostRecipe());
                     NcPreview.Text = nc;
                     ncNote = $" · NC {profile.Id} lines={nc.Split('\n').Length}";
                     opsNote = $" · ops c={opsForNc.Count(o => o.Op == "contour")} d={opsForNc.Count(o => o.Op == "drill")} g={opsForNc.Count(o => o.Op == "groove")}";
@@ -2179,7 +3511,7 @@ public partial class MainWindow : Window
         var enable = !busy;
         StockInitialNestBtn.IsEnabled = enable;
         NestApplyBtn.IsEnabled = enable;
-        NestNcBtn.IsEnabled = enable;
+        NestStabilizeBtn.IsEnabled = enable;
         NestGuillotineBtn.IsEnabled = enable;
         NestVerifyPolyBtn.IsEnabled = enable;
     }
@@ -2268,20 +3600,32 @@ public partial class MainWindow : Window
             ContourDepthMm = p.ContourDepthMm,
             ContourStepdownMm = p.ContourStepdownMm,
             DrillPeckMm = p.DrillPeckMm,
-            EnableContour = _enableContour,
-            EnableDrill = _enableDrill,
-            EnableGroove = _enableGroove,
+            EnableContour = true,
+            EnableDrill = true,
+            EnableGroove = true,
             OriginNote = p.OriginNote,
         };
     }
 
     void RegenerateNcFromCurrentOps()
     {
-        if (_opsOverlay.Count == 0 || _nest is not { Ok: true }) return;
-        var profile = ActiveProfileForCam();
-        NcPreview.Text = NcEmitter.OpsToNc(_opsOverlay, profile);
-        RefreshWorkflowDots();
-        RefreshPreflightMeta();
+        if (_opsOverlay.Count == 0 || _nest is not { Ok: true })
+        {
+            _exportFiles = [];
+            _exportSelected = null;
+            if (OutFileList is not null)
+            {
+                _syncingExportFiles = true;
+                OutFileList.ItemsSource = _exportFiles;
+                _syncingExportFiles = false;
+            }
+            if (NcPreview is not null) NcPreview.Text = "";
+            RefreshExportButtons();
+            RefreshWorkflowDots();
+            RefreshPreflightMeta();
+            return;
+        }
+        RefreshExportFiles();
     }
 
     async void OnOpenClick(object sender, RoutedEventArgs e)
@@ -2299,15 +3643,7 @@ public partial class MainWindow : Window
             ShowImportDialog(false, "载入方案", Path.GetFileName(dlg.FileName), result);
             return;
         }
-        _nest = null;
-        _nestSheetsUsed = [];
-        _partInPartSlots = [];
-        _guillotineBySheet.Clear();
-        _nestHolding.Clear();
-        _holdingLayout = [];
-        _activeNestSheet = 0;
-        _showNest = false;
-        NcPreview.Text = "";
+        ClearManufacturingState();
         _module = "production";
         HighlightModule();
         ApplyModuleVisibility();
@@ -2329,13 +3665,13 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog
         {
             Filter = "CabinetNC project|project.db;*.db|All|*.*",
-            Title = "Open project.db",
+            Title = "打开工程",
         };
         if (dlg.ShowDialog() != true) return;
         var doc = _store.Load(dlg.FileName);
         if (doc is null)
         {
-            SetStatus("Project empty or unreadable");
+            SetStatus("工程为空或无法读取");
             ShowImportDialog(false, "打开工程", Path.GetFileName(dlg.FileName), null, "工程为空或无法读取");
             return;
         }
@@ -2349,15 +3685,27 @@ public partial class MainWindow : Window
             ShowImportDialog(false, "打开工程", Path.GetFileName(dlg.FileName), result);
             return;
         }
+
+        ClearManufacturingState();
         _session.MachineId = doc.MachineId;
         _session.SetProjectDbPath(dlg.FileName);
         SyncMachineSelection(doc.MachineId);
-        NcPreview.Text = doc.NcText ?? "";
+
+        var session = ProjectSessionCodec.Deserialize(doc.SessionJson);
+        if (session is not null)
+            ApplyProjectSession(session);
 
         var places = SqliteProjectStore.DeserializeNest(doc.NestPlacementsJson);
         if (places.Count > 0)
         {
-            _nest = new StartNestingReply { Ok = true, Engine = "restored", SheetCount = places.Max(p => p.SheetIndex) + 1 };
+            _nest = new StartNestingReply
+            {
+                Ok = true,
+                Engine = session?.NestEngine ?? "restored",
+                SheetCount = session is { NestSheetCount: > 0 }
+                    ? session.NestSheetCount
+                    : places.Max(p => p.SheetIndex) + 1,
+            };
             foreach (var p in places)
             {
                 _nest.Placements.Add(new NestPlacementMsg
@@ -2369,33 +3717,43 @@ public partial class MainWindow : Window
                     RotationDeg = p.RotationDeg,
                 });
             }
-            _showNest = true;
-            _stageChanging = true;
-            StageTabs.SelectedIndex = 2; // nest
-            _stage = "nest";
-            _stageChanging = false;
+            if (session is { Unplaced.Count: > 0 })
+                _nest.Unplaced.AddRange(session.Unplaced);
         }
-        else
-        {
-            _nest = null;
-            _nestSheetsUsed = [];
-            _activeNestSheet = 0;
-            _showNest = false;
-            _stageChanging = true;
-            StageTabs.SelectedIndex = 0;
-            _stage = "load";
-            _stageChanging = false;
-        }
+
+        if (string.IsNullOrWhiteSpace(doc.SessionJson))
+            NcPreview.Text = doc.NcText ?? "";
 
         _module = "production";
         HighlightModule();
         ApplyModuleVisibility();
         BindPackage();
+        RestoreProjectStage(session?.Stage ?? (places.Count > 0 ? "nest" : "load"));
         ApplyStageVisibility();
         UpdateStageChrome();
-        SetStatus($"Opened project · panels={_session.Package!.Panels.Count} · nest={places.Count} · {doc.Name}");
+        RefreshBridgeCount();
+        RefreshOpsRail();
+        RefreshCamFrames();
+        RefreshExportFiles();
+        if (session?.SelectedExportFile is { Length: > 0 } keepName)
+        {
+            var pick = _exportFiles.FirstOrDefault(f => f.FileName == keepName);
+            if (pick is not null)
+            {
+                _syncingExportFiles = true;
+                OutFileList.SelectedItem = pick;
+                _syncingExportFiles = false;
+                _exportSelected = pick;
+                NcPreview.Text = pick.NcText;
+            }
+        }
+        else if (_exportFiles.Count == 0 && !string.IsNullOrWhiteSpace(doc.NcText))
+            NcPreview.Text = doc.NcText;
+        UpdateNestSheetChrome();
+        CanvasHost.InvalidateVisual();
+        SetStatus($"Opened project · panels={_session.Package!.Panels.Count} · nest={places.Count} · ops={_opsOverlay.Count} · {doc.Name}");
         ShowImportDialog(true, "打开工程", Path.GetFileName(dlg.FileName), result,
-            $"工程名: {doc.Name}\n机型: {doc.MachineId}\n已恢复摆位: {places.Count}");
+            $"工程名: {doc.Name}\n机型: {doc.MachineId}\n已恢复摆位: {places.Count}\n刀路: {_opsOverlay.Count}\n桥: {_profileBridges.Count}");
     }
 
     /// <summary>Import result popup — success/fail + basic package stats.</summary>
@@ -2519,15 +3877,20 @@ public partial class MainWindow : Window
     {
         if (_session.Package is null || string.IsNullOrWhiteSpace(_session.PackageJson))
         {
-            SetStatus("Nothing to save — open a cut-package first");
+            SetStatus("请先载入方案再保存工程");
             return;
         }
 
+        var defaultName = !string.IsNullOrEmpty(_session.ProjectDbPath)
+            ? Path.GetFileName(_session.ProjectDbPath)
+            : !string.IsNullOrWhiteSpace(_session.Package.JobId)
+                ? _session.Package.JobId + ".db"
+                : "project.db";
         var dlg = new SaveFileDialog
         {
-            Filter = "CabinetNC project|project.db|SQLite|*.db",
-            FileName = Path.GetFileName(_session.ProjectDbPath) ?? "project.db",
-            Title = "Save project.db",
+            Filter = "CabinetNC project|project.db;*.db|SQLite|*.db",
+            FileName = defaultName,
+            Title = "保存工程",
         };
         if (!string.IsNullOrEmpty(_session.ProjectDbPath))
             dlg.InitialDirectory = Path.GetDirectoryName(_session.ProjectDbPath);
@@ -2544,6 +3907,7 @@ public partial class MainWindow : Window
             }))
             : null;
 
+        var session = CaptureProjectSession();
         var name = Path.GetFileNameWithoutExtension(dlg.FileName);
         _store.Save(dlg.FileName, new ProjectDocument
         {
@@ -2555,32 +3919,51 @@ public partial class MainWindow : Window
             NcText = string.IsNullOrWhiteSpace(NcPreview.Text) || NcPreview.Text.StartsWith("//")
                 ? null
                 : NcPreview.Text,
+            SessionJson = ProjectSessionCodec.Serialize(session),
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         _session.SetProjectDbPath(dlg.FileName);
         _session.MachineId = SelectedMachineId();
-        SetStatus($"Saved project → {dlg.FileName}");
+        SetStatus($"已保存工程 → {dlg.FileName}");
         UsageLog.LogActionResult("project.save", new Dictionary<string, object?>
         {
             ["ok"] = true,
             ["path"] = dlg.FileName,
             ["panelCount"] = _session.Package.Panels.Count,
             ["hasNest"] = nestJson is not null,
+            ["opCount"] = _opsOverlay.Count,
+            ["bridgeCount"] = _profileBridges.Count,
             ["machineId"] = SelectedMachineId(),
+            ["stage"] = _stage,
         });
     }
 
     async void OnPingClick(object sender, RoutedEventArgs e) => await RefreshWorkerAsync();
 
-    void OnRouteEnableClick(object sender, RoutedEventArgs e)
+    void OnCamStrategyEnableClick(object sender, RoutedEventArgs e)
     {
-        _enableContour = RouteContourChk.IsChecked == true;
-        _enableDrill = RouteDrillChk.IsChecked == true;
-        _enableGroove = RouteGrooveChk.IsChecked == true;
+        if (_syncingOpsStrategy) return;
+        if (sender == RouteTongueChk || sender == RouteContourChk || sender == RouteGrooveChk || sender == RouteDrillChk)
+        {
+            _enableTongue = RouteTongueChk.IsChecked == true;
+            _enableClearance = RouteGrooveChk.IsChecked == true;
+            _enableDrilling = RouteDrillChk.IsChecked == true;
+            var profileOn = RouteContourChk.IsChecked == true;
+            _enableProfile = profileOn;
+            _enableProfileLast = profileOn;
+        }
+        else
+        {
+            _enableTongue = OpsTongueChk.IsChecked == true;
+            _enableClearance = OpsClearanceChk.IsChecked == true;
+            _enableProfile = OpsProfileChk.IsChecked == true;
+            _enableProfileLast = OpsProfileLastChk.IsChecked == true;
+            _enableBridges = OpsBridgeChk.IsChecked == true;
+            _enableDrilling = OpsDrillChk.IsChecked == true;
+        }
         RebuildOpsOverlay();
-        RegenerateNcFromCurrentOps();
         CanvasHost.InvalidateVisual();
-        SetStatus($"工序开关 · contour={_enableContour} drill={_enableDrill} groove={_enableGroove}");
+        SetStatus($"刀路开关 · 半槽={_enableTongue} 清底={_enableClearance} 第一刀={_enableProfile} 最后一刀={_enableProfileLast}");
     }
 
     void OnPreflightClick(object sender, RoutedEventArgs e)
@@ -2793,7 +4176,8 @@ public partial class MainWindow : Window
             places,
             _opsOverlay,
             profile,
-            jobSheetHtml: html);
+            jobSheetHtml: html,
+            recipe: CurrentPostRecipe());
         var written = SheetBundleBuilder.WriteToDirectory(bundle, dir);
         if (!string.IsNullOrWhiteSpace(_session.PackageJson))
             File.WriteAllText(Path.Combine(dir, bundle.JobId + ".cut.json"), _session.PackageJson);
@@ -2872,10 +4256,15 @@ public partial class MainWindow : Window
             SetStatus("请先载入方案");
             return;
         }
-        if (_nest is not { Ok: true } || !HasNcText())
+        if (_nest is not { Ok: true })
         {
-            SetStatus("一键导出：正在生成密排与加工档…");
-            await RunNestAsync(withNc: true);
+            SetStatus("一键导出：正在密排…");
+            await RunNestAsync(withNc: false);
+        }
+        if (_nest is { Ok: true } && !HasNcText())
+        {
+            SetStatus("一键导出：正在按规则计算刀路…");
+            RebuildOpsOverlay();
         }
         if (!HasNcText())
         {
@@ -2925,6 +4314,12 @@ public partial class MainWindow : Window
     void OnPartSelected(object sender, SelectionChangedEventArgs e)
     {
         _selected = PartList.SelectedItem as PanelPart;
+        if (!_syncingNestSelection)
+        {
+            _nestSelected.Clear();
+            if (_selected is not null)
+                _nestSelected.Add(_selected.PanelId);
+        }
         if (_selected is not null && _locked.Contains(_selected.PanelId))
             LockPlaceBtn.Content = "解锁摆位";
         else
@@ -2940,6 +4335,20 @@ public partial class MainWindow : Window
         }
         RefreshGeomRail();
         CanvasHost.InvalidateVisual();
+    }
+
+    static bool IsNestChromeClick(object? source)
+    {
+        if (source is not DependencyObject d) return false;
+        while (d is not null)
+        {
+            if (d is FrameworkElement { Name: "NestCanvasChrome" or "NestSheetPrevBtn" or "NestSheetNextBtn" })
+                return true;
+            if (d is System.Windows.Controls.Primitives.ButtonBase)
+                return true;
+            d = VisualTreeHelper.GetParent(d);
+        }
+        return false;
     }
 
     (float X, float Y) CanvasPixelPos(MouseEventArgs e)
@@ -2960,6 +4369,10 @@ public partial class MainWindow : Window
 
     void OnCanvasDown(object sender, MouseButtonEventArgs e)
     {
+        // Preview on CanvasPane would steal ◀ ▶ / chrome clicks for box-select.
+        if (IsNestChromeClick(e.OriginalSource))
+            return;
+
         RefreshDpi();
         var (x, y) = CanvasPixelPos(e);
 
@@ -3000,16 +4413,56 @@ public partial class MainWindow : Window
                     SetStatus($"待用 · {holdId}");
                     return;
                 }
+                var additive = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+                if (additive)
+                {
+                    foreach (var id in _nestSelected
+                                 .Where(sid => _nestHolding.All(h => h.PanelId != sid))
+                                 .ToList())
+                        _nestSelected.Remove(id);
+                    if (!_nestSelected.Add(holdId))
+                        _nestSelected.Remove(holdId);
+                    SyncPartListFromNestSelection(holdId);
+                    SetStatus(_nestSelected.Count == 0
+                        ? "已取消选中"
+                        : $"待用已选 {_nestSelected.Count} 件（Ctrl 加减 · 拖进密排）");
+                    CanvasHost.InvalidateVisual();
+                    e.Handled = true;
+                    return;
+                }
+                var holdIds = HoldingSelectedIds(holdId);
+                _nestSelected.Clear();
+                foreach (var id in holdIds)
+                    _nestSelected.Add(id);
+                SyncPartListFromNestSelection(holdId);
                 _dragMode = "nest";
                 _nestDragFromHold = true;
                 _nestDragPanelId = holdId;
+                _holdSlideHasValid = false;
                 var (mx, my) = ScreenToSheet(x, y);
                 _nestStartMx = mx;
                 _nestStartMy = my;
                 _nestOrigOx = 0;
                 _nestOrigOy = 0;
+                _nestDragRotDeg = _nestHolding.FirstOrDefault(h => h.PanelId == holdId)?.RotationDeg ?? 0;
                 CanvasPane.CaptureMouse();
-                SetStatus($"从待用区拖回 · {holdId}");
+                SetStatus(holdIds.Count > 1
+                    ? $"从待用区拖回 {holdIds.Count} 件 · 右键旋转90° · Alt 上下左右 · S 硬约束"
+                    : $"从待用区拖回 · {holdId} · 右键旋转90° · Alt 上下左右 · S 硬约束");
+                e.Handled = true;
+                return;
+            }
+
+            if (_stage == "ops" && _bridgeDeleteMode)
+            {
+                TryHandleBridgeDeleteClick(x, y);
+                e.Handled = true;
+                return;
+            }
+
+            if (_stage == "ops" && _bridgeManualMode)
+            {
+                TryHandleBridgeManualClick(x, y);
                 e.Handled = true;
                 return;
             }
@@ -3017,16 +4470,43 @@ public partial class MainWindow : Window
             var hitId = HitTestNest(x, y);
             if (hitId is null)
             {
-                SetStatus(ScreenInHoldingBay(x) ? "待用区 · 从大板拖入板件" : "未点中板件");
+                if (_stage == "ops" || ScreenInHoldingBay(x))
+                {
+                    SetStatus(ScreenInHoldingBay(x) ? "待用区 · 从大板拖入板件" : "未点中板件");
+                    return;
+                }
+                var (bx, by) = ScreenToSheet(x, y);
+                _dragMode = "nestBox";
+                _nestBoxX0 = _nestBoxX1 = bx;
+                _nestBoxY0 = _nestBoxY1 = by;
+                CanvasPane.CaptureMouse();
+                SetStatus("框选 · 右划全包围 · 左划碰到即选");
+                e.Handled = true;
                 return;
             }
             var place = _nest.Placements.FirstOrDefault(p => p.PanelId == hitId);
             if (place is null) return;
             var nestPanel = _session.Package?.Panels.FirstOrDefault(p => p.PanelId == hitId);
-            if (nestPanel is not null)
-                PartList.SelectedItem = nestPanel;
+            var nestAdditive = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+            if (nestAdditive)
+            {
+                if (!_nestSelected.Add(hitId))
+                    _nestSelected.Remove(hitId);
+                SyncPartListFromNestSelection(hitId);
+                SetStatus(_nestSelected.Count == 0
+                    ? "已取消选中"
+                    : _nestSelected.Count == 2
+                        ? "已选 2 件（Ctrl 加减 · 按住 D 看间距）"
+                        : $"已选 {_nestSelected.Count} 件（Ctrl 加减）");
+                CanvasHost.InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
             if (_stage == "ops")
             {
+                _nestSelected.Clear();
+                _nestSelected.Add(hitId);
+                SyncPartListFromNestSelection(hitId);
                 SetStatus($"选中 {hitId}");
                 return;
             }
@@ -3035,6 +4515,12 @@ public partial class MainWindow : Window
                 SetStatus($"已锁定 · {hitId}");
                 return;
             }
+            if (!_nestSelected.Contains(hitId))
+            {
+                _nestSelected.Clear();
+                _nestSelected.Add(hitId);
+            }
+            SyncPartListFromNestSelection(hitId);
             var (smx, smy) = ScreenToSheet(x, y);
             _dragMode = "nest";
             _nestDragFromHold = false;
@@ -3043,8 +4529,10 @@ public partial class MainWindow : Window
             _nestStartMy = smy;
             _nestOrigOx = place.OffsetX;
             _nestOrigOy = place.OffsetY;
+            _nestDragRotDeg = place.RotationDeg;
+            CaptureNestGroupOrig();
             CanvasPane.CaptureMouse();
-            SetStatus($"拖摆位 {hitId}");
+            SetStatus(NestDragStatus(_nestSelected.Count > 1 ? _nestSelected.Count : 0, hitId));
             e.Handled = true;
         }
     }
@@ -3071,44 +4559,542 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_dragMode == "nestBox")
+        {
+            var (mx, my) = ScreenToSheet(x, y);
+            _nestBoxX1 = mx;
+            _nestBoxY1 = my;
+            SetStatus(NestDrag.IsCrossingSelect(_nestBoxX0, _nestBoxX1)
+                ? "交叉选择（碰到即选）"
+                : "窗口选择（全包围）");
+            CanvasHost.InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
         if (_dragMode == "nest" && _nestDragPanelId is not null && _nest is { Ok: true })
         {
-            // From holding: only preview cursor via invalidate; place on mouse-up.
-            if (_nestDragFromHold)
-            {
-                CanvasHost.InvalidateVisual();
-                e.Handled = true;
-                return;
-            }
-
-            var (mx, my) = ScreenToSheet(x, y);
-            var ox = NestDrag.SnapMm(_nestOrigOx + (mx - _nestStartMx), 1);
-            var oy = NestDrag.SnapMm(_nestOrigOy + (my - _nestStartMy), 1);
-            var place = _nest.Placements.FirstOrDefault(p => p.PanelId == _nestDragPanelId);
-            if (place is null || _session.Package is null) return;
-            if (!_session.Package.Panels.ToDictionary(p => p.PanelId).TryGetValue(_nestDragPanelId, out var panel))
-                return;
-            var (sw, sh, _) = ActiveSheetMetrics();
-            if (ScreenInHoldingBay(x))
-            {
-                // Allow leaving the sheet toward the bay (no clamp).
-                place.OffsetX = ox;
-                place.OffsetY = oy;
-            }
-            else
-            {
-                var (cx, cy) = NestDrag.ClampOnSheet(
-                    panel, ox, oy, place.RotationDeg, sw, sh, ParseMm(NestBorderBox.Text, 15));
-                place.OffsetX = cx;
-                place.OffsetY = cy;
-            }
-            CanvasHost.InvalidateVisual();
+            ApplyNestDragFromScreen(x, y);
             e.Handled = true;
         }
     }
 
+    void ApplyNestDragAtLastPointer() =>
+        ApplyNestDragFromScreen(_lastCanvasX, _lastCanvasY);
+
+    void ApplyNestDragFromScreen(float x, float y)
+    {
+        if (_dragMode != "nest" || _nestDragPanelId is null || _nest is not { Ok: true })
+            return;
+        if (_nestDragFromHold)
+        {
+            UpdateHoldPreviewFromScreen(x, y);
+            CanvasHost.InvalidateVisual();
+            return;
+        }
+
+        var (mx, my) = ScreenToSheet(x, y);
+        var altLock = AltIsDown();
+        var hard = SIsDown() && !IsTypingTarget();
+        var (ox, oy) = NestDrag.DragOffset(
+            _nestOrigOx, _nestOrigOy, _nestStartMx, _nestStartMy, mx, my, altLock);
+        var place = _nest.Placements.FirstOrDefault(p => p.PanelId == _nestDragPanelId);
+        if (place is null || _session.Package is null) return;
+        var byId = _session.Package.Panels.ToDictionary(p => p.PanelId);
+        if (!byId.TryGetValue(_nestDragPanelId, out var panel))
+            return;
+        var (sw, sh, _) = ActiveSheetMetrics();
+        var border = ParseMm(NestBorderBox.Text, 15);
+        var towardBay = ScreenInHoldingBay(x);
+        place.RotationDeg = _nestDragRotDeg;
+        if (towardBay)
+        {
+            place.OffsetX = ox;
+            place.OffsetY = oy;
+        }
+        else
+        {
+            var (cx, cy) = NestDrag.ClampOnSheet(
+                panel, ox, oy, place.RotationDeg, sw, sh, border);
+            ox = cx;
+            oy = cy;
+            (ox, oy) = ClampPipChild(_nestDragPanelId, panel, ox, oy, place.RotationDeg);
+            if (hard)
+            {
+                var spacing = ParseMm(NestSpacingBox.Text, 12);
+                var movingIds = _nestGroupOrig.Count > 1
+                    ? _nestGroupOrig.Keys.ToHashSet(StringComparer.Ordinal)
+                    : new HashSet<string>(StringComparer.Ordinal) { _nestDragPanelId };
+                var members = BuildSlideMembers(byId, movingIds, _nestDragPanelId);
+                var others = _nest.Placements
+                    .Where(p => !movingIds.Contains(p.PanelId))
+                    .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
+                    .ToList();
+                (ox, oy) = NestDrag.SlideTo(
+                    members, _nestDragPanelId,
+                    place.OffsetX, place.OffsetY, ox, oy,
+                    _activeNestSheet, others, byId, sw, sh, spacing, border,
+                    _nestOrigOx, _nestOrigOy,
+                    PipIgnorePairs());
+                (ox, oy) = ClampPipChild(_nestDragPanelId, panel, ox, oy, place.RotationDeg);
+            }
+            place.OffsetX = ox;
+            place.OffsetY = oy;
+        }
+        if (_nestGroupOrig.Count > 1)
+        {
+            var dx = place.OffsetX - _nestOrigOx;
+            var dy = place.OffsetY - _nestOrigOy;
+            foreach (var (id, orig) in _nestGroupOrig)
+            {
+                if (id == _nestDragPanelId) continue;
+                var other = _nest.Placements.FirstOrDefault(p => p.PanelId == id);
+                if (other is null) continue;
+                if (!byId.TryGetValue(id, out var otherPanel))
+                    continue;
+                var nx = orig.Ox + dx;
+                var ny = orig.Oy + dy;
+                if (!towardBay && !hard)
+                    (nx, ny) = NestDrag.ClampOnSheet(
+                        otherPanel, nx, ny, other.RotationDeg, sw, sh, border);
+                other.OffsetX = nx;
+                other.OffsetY = ny;
+            }
+        }
+        CanvasHost.InvalidateVisual();
+        if (hard || altLock)
+            SetStatus(NestDragStatus(_nestGroupOrig.Count > 1 ? _nestGroupOrig.Count : 0, _nestDragPanelId));
+    }
+
+    void UpdateHoldPreviewFromScreen(float x, float y)
+    {
+        _holdPreviewOnSheet = false;
+        _holdPreviewBlocked = false;
+        _holdPreviewPlaces.Clear();
+        if (_nestDragPanelId is null || _session.Package is null || _nest is not { Ok: true })
+            return;
+        var dragIds = HoldingDragIds();
+        if (ScreenInHoldingBay(x))
+        {
+            SetStatus(dragIds.Count > 1
+                ? $"从待用区拖回 {dragIds.Count} 件 · 拖到左侧大板"
+                : $"从待用区拖回 · {_nestDragPanelId} · 拖到左侧大板");
+            return;
+        }
+
+        var byId = _session.Package.Panels.ToDictionary(p => p.PanelId);
+        var sheetKey = ActiveSheetGroupKey();
+        var packing = new List<(string Id, double W, double H, double Rot)>();
+        var materialOk = true;
+        foreach (var id in dragIds)
+        {
+            if (!byId.TryGetValue(id, out var panel)) continue;
+            var held = _nestHolding.FirstOrDefault(h => h.PanelId == id);
+            var rot = held?.RotationDeg ?? 0;
+            var (w, h) = NestDrag.SizeRotated(panel, rot);
+            packing.Add((id, w, h, rot));
+            var partKey = held is not null
+                ? NestGroupKey.From(held.Material, held.ThicknessMm)
+                : NestGroupKey.From(panel.Material, panel.ThicknessMm);
+            if (!SameNestMaterial(partKey, sheetKey))
+                materialOk = false;
+        }
+        if (packing.Count == 0) return;
+
+        var (sw, sh, _) = ActiveSheetMetrics();
+        var border = ActiveSheetBorderMm();
+        var spacing = ActiveSheetSpacingMm();
+        var maxW = Math.Max(1, sw - border * 2);
+        var (groupW, groupH, packed) = NestDrag.PackHoldCluster(packing, spacing, maxW);
+
+        var (mx, my) = ScreenToSheet(x, y);
+        var altLock = AltIsDown();
+        var hard = SIsDown() && !IsTypingTarget();
+        if (altLock)
+        {
+            var (cdx, cdy) = NestDrag.CardinalDelta(mx - _nestStartMx, my - _nestStartMy);
+            mx = _nestStartMx + cdx;
+            my = _nestStartMy + cdy;
+        }
+        var rawOx = NestDrag.SnapMm(mx - groupW * 0.5, 1);
+        var rawOy = NestDrag.SnapMm(my - groupH * 0.5, 1);
+        var (groupOx, groupOy) = NestDrag.ClampGroupOnSheet(
+            groupW, groupH, rawOx, rawOy, sw, sh, border);
+
+        var allowOverlap = AllowOverlapChk.IsChecked == true;
+        var others = _nest.Placements
+            .Where(p => p.SheetIndex == _activeNestSheet)
+            .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
+            .ToList();
+        var blocked = !materialOk;
+        if (groupW > sw - border * 2 + 1e-6 || groupH > sh - border * 2 + 1e-6)
+            blocked = true;
+
+        var grabPacked = packed.FirstOrDefault(p => p.Id == _nestDragPanelId);
+        if (grabPacked.Id is null && packed.Count > 0) grabPacked = packed[0];
+        var members = new List<NestDrag.SlideMember>();
+        if (grabPacked.Id is not null)
+        {
+            foreach (var p in packed)
+            {
+                if (!byId.TryGetValue(p.Id, out var pan)) continue;
+                members.Add(new NestDrag.SlideMember(
+                    p.Id, pan,
+                    p.LocalOx - grabPacked.LocalOx,
+                    p.LocalOy - grabPacked.LocalOy,
+                    p.Rot));
+            }
+        }
+
+        if (hard && members.Count > 0 && grabPacked.Id is not null && !blocked)
+        {
+            var desiredOx = groupOx + grabPacked.LocalOx;
+            var desiredOy = groupOy + grabPacked.LocalOy;
+            var fromOx = _holdSlideHasValid ? _holdSlideOx : desiredOx;
+            var fromOy = _holdSlideHasValid ? _holdSlideOy : desiredOy;
+            var safeOx = _holdSlideHasValid ? _holdSlideOx : desiredOx;
+            var safeOy = _holdSlideHasValid ? _holdSlideOy : desiredOy;
+            var (sx, sy) = NestDrag.SlideTo(
+                members, grabPacked.Id, fromOx, fromOy, desiredOx, desiredOy,
+                _activeNestSheet, others, byId, sw, sh, spacing, border, safeOx, safeOy);
+            if (NestDrag.PoseFits(
+                    members, grabPacked.Id, sx, sy, _activeNestSheet, others, byId,
+                    sw, sh, spacing, border))
+            {
+                groupOx = sx - grabPacked.LocalOx;
+                groupOy = sy - grabPacked.LocalOy;
+                _holdSlideOx = sx;
+                _holdSlideOy = sy;
+                _holdSlideHasValid = true;
+            }
+            else if (_holdSlideHasValid)
+            {
+                groupOx = _holdSlideOx - grabPacked.LocalOx;
+                groupOy = _holdSlideOy - grabPacked.LocalOy;
+            }
+        }
+
+        foreach (var part in packed)
+        {
+            var ox = groupOx + part.LocalOx;
+            var oy = groupOy + part.LocalOy;
+            _holdPreviewPlaces.Add(new CanvasPainter.HoldPreviewPart(part.Id, ox, oy, part.Rot));
+            if (blocked || allowOverlap || hard) continue;
+            if (!byId.TryGetValue(part.Id, out var panel)) continue;
+            var (_, _, hit) = NestDrag.Resolve(
+                panel, part.Id, ox, oy, part.Rot, _activeNestSheet,
+                others, byId, sw, sh, spacing, border,
+                (ox, oy), allowOverlap: false);
+            if (hit) blocked = true;
+        }
+
+        if (hard && _holdSlideHasValid)
+            blocked = false;
+
+        _holdPreviewOnSheet = true;
+        _holdPreviewBlocked = blocked;
+        if (!materialOk)
+            SetStatus($"材料不符 · 当前大板是 {sheetKey}");
+        else if (blocked)
+            SetStatus($"投影重叠或间距不足 · {packing.Count} 件 · 右键旋转90°");
+        else
+            SetStatus($"投影 {packing.Count} 件 · 右键旋转90° · Alt 上下左右 · S 硬约束 · 松开放入");
+    }
+
+    List<string> HoldingSelectedIds(string grabbedId)
+    {
+        var inHold = _nestHolding.Select(h => h.PanelId).ToHashSet(StringComparer.Ordinal);
+        var selectedHold = _nestSelected.Where(inHold.Contains).ToHashSet(StringComparer.Ordinal);
+        if (!selectedHold.Contains(grabbedId))
+            return [grabbedId];
+        return _nestHolding.Where(h => selectedHold.Contains(h.PanelId)).Select(h => h.PanelId).ToList();
+    }
+
+    List<string> HoldingDragIds()
+    {
+        var grabbed = _nestDragPanelId;
+        if (grabbed is null) return [];
+        return HoldingSelectedIds(grabbed);
+    }
+
+    bool _nestRightHandled;
+
+    void OnWindowRightDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_nestRightHandled || _stage != "nest") return;
+        if (IsNestChromeClick(e.OriginalSource)) return;
+        CanvasPixelPos(e);
+        if (_dragMode == "nest" && _nestDragPanelId is not null)
+        {
+            RotateNestDragClockwise90();
+            _nestRightHandled = true;
+            e.Handled = true;
+            return;
+        }
+        if (_dragMode is not null) return;
+        if (_nest is not { Ok: true }) return;
+        EnsureNestViewMetrics();
+        var hitId = HitTestNest(_lastCanvasX, _lastCanvasY);
+        if (hitId is null) return;
+        if (_locked.Contains(hitId))
+        {
+            SetStatus($"已锁定 · {hitId}");
+            _nestRightHandled = true;
+            e.Handled = true;
+            return;
+        }
+        var rotateIds = _nestSelected.Contains(hitId) && _nestSelected.Count > 1
+            ? _nestSelected.Where(id => !_locked.Contains(id)).ToList()
+            : [hitId];
+        foreach (var id in rotateIds)
+            RotateNestPlacement(id);
+        _nestRightHandled = true;
+        e.Handled = true;
+    }
+
+    void OnWindowRightUp(object sender, MouseButtonEventArgs e)
+    {
+        _nestRightHandled = false;
+        if (_dragMode == "nest" || _stage == "nest")
+            e.Handled = true;
+    }
+
+    void OnCanvasRightDown(object sender, MouseButtonEventArgs e) => OnWindowRightDown(sender, e);
+
+    void OnCanvasRightUp(object sender, MouseButtonEventArgs e) => OnWindowRightUp(sender, e);
+
+    HwndSource? _hwndSource;
+
+    const int WmKeyDown = 0x0100;
+    const int WmKeyUp = 0x0101;
+    const int WmSysKeyDown = 0x0104;
+    const int WmSysKeyUp = 0x0105;
+    const int WmSysCommand = 0x0112;
+    const int ScKeyMenu = 0xF100;
+    const int VkMenu = 0x12;
+    const int VkLMenu = 0xA4;
+    const int VkRMenu = 0xA5;
+    const int VkD = 0x44;
+    const int VkS = 0x53;
+
+    [DllImport("user32.dll")]
+    static extern short GetAsyncKeyState(int vKey);
+
+    IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        // Alt otherwise enters Win32 menu mode and mouse-drag stalls for ~500ms.
+        if (msg == WmSysCommand && ((int)wParam & 0xFFF0) == ScKeyMenu)
+        {
+            if (_dragMode == "nest" || _stage == "nest")
+            {
+                handled = true;
+                return IntPtr.Zero;
+            }
+        }
+        if (msg is WmSysKeyDown or WmSysKeyUp)
+        {
+            var vk = (int)wParam.ToInt64() & 0xFFFF;
+            if (vk is VkMenu or VkLMenu or VkRMenu or VkS)
+            {
+                if (vk == VkS && (IsTypingTarget() || _dragMode != "nest"))
+                    return IntPtr.Zero;
+                if (_dragMode == "nest" || (vk != VkS && _stage == "nest"))
+                {
+                    var repeat = msg == WmSysKeyDown && ((lParam.ToInt64() >> 30) & 1) != 0;
+                    if (_dragMode == "nest" && !repeat)
+                        ApplyNestDragAtLastPointer();
+                    handled = true;
+                    return IntPtr.Zero;
+                }
+            }
+        }
+        if (msg is WmKeyDown or WmKeyUp)
+        {
+            var vk = (int)wParam.ToInt64() & 0xFFFF;
+            if (vk is VkD or VkS)
+            {
+                var repeat = msg == WmKeyDown && ((lParam.ToInt64() >> 30) & 1) != 0;
+                if (vk == VkS)
+                {
+                    if (!IsTypingTarget() && _dragMode == "nest")
+                    {
+                        if (!repeat)
+                            ApplyNestDragAtLastPointer();
+                        handled = true;
+                        return IntPtr.Zero;
+                    }
+                }
+                if (vk == VkD)
+                {
+                    if (!repeat)
+                        CanvasHost.InvalidateVisual();
+                    if (msg == WmKeyDown
+                        && _stage is "nest" or "ops"
+                        && _nestSelected.Count == 2
+                        && Keyboard.Modifiers == ModifierKeys.None
+                        && !IsTypingTarget())
+                    {
+                        handled = true;
+                        return IntPtr.Zero;
+                    }
+                }
+            }
+        }
+        return IntPtr.Zero;
+    }
+
+    static bool AltIsDown() =>
+        (GetAsyncKeyState(VkMenu) & 0x8000) != 0
+        || (GetAsyncKeyState(VkLMenu) & 0x8000) != 0
+        || (GetAsyncKeyState(VkRMenu) & 0x8000) != 0;
+
+    static bool DIsDown() => (GetAsyncKeyState(VkD) & 0x8000) != 0;
+
+    static bool SIsDown() => (GetAsyncKeyState(VkS) & 0x8000) != 0;
+
+    static bool IsAltKey(KeyEventArgs e) =>
+        e.Key is Key.LeftAlt or Key.RightAlt
+        || e.SystemKey is Key.LeftAlt or Key.RightAlt;
+
+    static bool IsSKey(KeyEventArgs e) =>
+        e.Key == Key.S || e.SystemKey == Key.S;
+
+    string NestDragStatus(int groupCount, string? id)
+    {
+        var hint = "右键旋转90° · Alt 上下左右 · S 硬约束";
+        if (SIsDown() && AltIsDown())
+            hint = "右键旋转90° · Alt+S 轴锁硬约束";
+        else if (SIsDown())
+            hint = "右键旋转90° · S 硬约束";
+        else if (AltIsDown())
+            hint = "右键旋转90° · Alt 上下左右";
+        if (groupCount > 1)
+            return $"拖动 {groupCount} 件 · {hint}";
+        return $"拖摆位 {id} · {hint}";
+    }
+
+    List<NestDrag.SlideMember> BuildSlideMembers(
+        IReadOnlyDictionary<string, PanelPart> byId,
+        IReadOnlySet<string> movingIds,
+        string grabbedId)
+    {
+        var list = new List<NestDrag.SlideMember>();
+        if (!_nestGroupOrig.TryGetValue(grabbedId, out var grabOrig)
+            && _nest is { Ok: true })
+        {
+            var place = _nest.Placements.FirstOrDefault(p => p.PanelId == grabbedId);
+            if (place is not null)
+                grabOrig = (place.OffsetX, place.OffsetY, place.RotationDeg);
+        }
+        foreach (var id in movingIds)
+        {
+            if (!byId.TryGetValue(id, out var panel)) continue;
+            if (_nestGroupOrig.TryGetValue(id, out var orig))
+            {
+                list.Add(new NestDrag.SlideMember(
+                    id, panel, orig.Ox - grabOrig.Ox, orig.Oy - grabOrig.Oy, orig.Rot));
+                continue;
+            }
+            var place = _nest?.Placements.FirstOrDefault(p => p.PanelId == id);
+            if (place is null) continue;
+            list.Add(new NestDrag.SlideMember(
+                id, panel, place.OffsetX - grabOrig.Ox, place.OffsetY - grabOrig.Oy, place.RotationDeg));
+        }
+        return list;
+    }
+
+    void RotateNestDragClockwise90()
+    {
+        if (_nestDragPanelId is null || _session.Package is null) return;
+        if (!_session.Package.Panels.ToDictionary(p => p.PanelId).TryGetValue(_nestDragPanelId, out var panel))
+            return;
+
+        var oldRot = _nestDragRotDeg;
+        var newRot = NestDrag.RotateClockwise90(oldRot);
+        _nestDragRotDeg = newRot;
+
+        if (_nestDragFromHold)
+        {
+            foreach (var id in HoldingDragIds())
+            {
+                var held = _nestHolding.FirstOrDefault(h => h.PanelId == id);
+                if (held is not null)
+                    held.RotationDeg = NestDrag.RotateClockwise90(held.RotationDeg);
+            }
+            _nestDragRotDeg = _nestHolding.FirstOrDefault(h => h.PanelId == _nestDragPanelId)?.RotationDeg ?? newRot;
+            _holdSlideHasValid = false;
+            UpdateHoldPreviewFromScreen(_lastCanvasX, _lastCanvasY);
+            if (!_holdPreviewOnSheet)
+                SetStatus($"旋转 {_nestDragRotDeg:0}° · {HoldingDragIds().Count} 件");
+            CanvasHost.InvalidateVisual();
+            return;
+        }
+
+        var rotateIds = _nestGroupOrig.Count > 1
+            ? _nestGroupOrig.Keys.ToList()
+            : [_nestDragPanelId];
+        foreach (var id in rotateIds)
+        {
+            var from = id == _nestDragPanelId
+                ? oldRot
+                : (_nestGroupOrig.TryGetValue(id, out var o) ? o.Rot : (double?)null);
+            RotateNestPlacement(id, from, null, keepDragAnchor: id == _nestDragPanelId);
+            var place = _nest?.Placements.FirstOrDefault(p => p.PanelId == id);
+            if (place is not null)
+                _nestGroupOrig[id] = (place.OffsetX, place.OffsetY, place.RotationDeg);
+        }
+        _nestDragRotDeg = _nest?.Placements.FirstOrDefault(p => p.PanelId == _nestDragPanelId)?.RotationDeg ?? newRot;
+    }
+
+    void RotateNestPlacement(string panelId) =>
+        RotateNestPlacement(panelId, null, null, keepDragAnchor: false);
+
+    void RotateNestPlacement(string panelId, double? oldRot, double? newRot, bool keepDragAnchor)
+    {
+        if (_nest is not { Ok: true } || _session.Package is null) return;
+        if (!_session.Package.Panels.ToDictionary(p => p.PanelId).TryGetValue(panelId, out var panel))
+            return;
+        var place = _nest.Placements.FirstOrDefault(p => p.PanelId == panelId);
+        if (place is null) return;
+
+        var from = oldRot ?? place.RotationDeg;
+        var to = newRot ?? NestDrag.RotateClockwise90(from);
+        var (ox, oy) = NestDrag.OffsetKeepingCenter(panel, place.OffsetX, place.OffsetY, from, to);
+        place.RotationDeg = to;
+        var (sw, sh, _) = ActiveSheetMetrics();
+        if (!ScreenInHoldingBay(_lastCanvasX))
+            (ox, oy) = NestDrag.ClampOnSheet(
+                panel, ox, oy, to, sw, sh, ParseMm(NestBorderBox.Text, 15));
+        place.OffsetX = ox;
+        place.OffsetY = oy;
+        if (keepDragAnchor)
+        {
+            _nestOrigOx = ox;
+            _nestOrigOy = oy;
+            var (mx, my) = ScreenToSheet(_lastCanvasX, _lastCanvasY);
+            _nestStartMx = mx;
+            _nestStartMy = my;
+        }
+        else
+        {
+            RefreshNestReport();
+        }
+        SetStatus($"旋转 {to:0}° · {panel.DisplayPartName}" + (keepDragAnchor ? " · Alt 上下左右" : ""));
+        CanvasHost.InvalidateVisual();
+    }
+
     void UpdateHoverCursor(float x, float y)
     {
+        if (_stage == "ops" && _bridgeDeleteMode)
+        {
+            CanvasPane.Cursor = Cursors.No;
+            return;
+        }
+        if (_stage == "ops" && _bridgeManualMode)
+        {
+            CanvasPane.Cursor = Cursors.Cross;
+            return;
+        }
         if (_stage == "load" && _selected is not null)
         {
             var w = _surfaceW > 0 ? _surfaceW : Math.Max(1, (int)(CanvasHost.ActualWidth * _dpiX));
@@ -3156,10 +5142,22 @@ public partial class MainWindow : Window
     void OnCanvasUp(object sender, MouseButtonEventArgs e)
     {
         CanvasPixelPos(e);
+        // Chord-click: pressing right while left is down can raise a spurious left-up.
+        if (Mouse.LeftButton == MouseButtonState.Pressed)
+            return;
         EndCanvasDrag();
     }
 
-    void OnCanvasLostCapture(object sender, MouseEventArgs e) => EndCanvasDrag();
+    void OnCanvasLostCapture(object sender, MouseEventArgs e)
+    {
+        if (Mouse.LeftButton == MouseButtonState.Pressed && _dragMode is not null)
+        {
+            if (!CanvasPane.IsMouseCaptured)
+                CanvasPane.CaptureMouse();
+            return;
+        }
+        EndCanvasDrag();
+    }
 
     float _lastCanvasX, _lastCanvasY;
 
@@ -3177,6 +5175,10 @@ public partial class MainWindow : Window
                 SetStatus("updated");
             }
         }
+        else if (_dragMode == "nestBox")
+        {
+            FinishNestBoxSelect();
+        }
         else if (_dragMode == "nest" && _nestDragPanelId is not null && _nest is { Ok: true } && _session.Package is not null)
         {
             FinishNestDrag(_nestDragPanelId, _nestDragFromHold, _lastCanvasX, _lastCanvasY);
@@ -3187,7 +5189,14 @@ public partial class MainWindow : Window
         _geomStart = null;
         _nestDragPanelId = null;
         _nestDragFromHold = false;
+        _holdPreviewOnSheet = false;
+        _holdPreviewBlocked = false;
+        _holdSlideHasValid = false;
+        _holdPreviewPlaces.Clear();
+        _nestDragRotDeg = 0;
+        _nestGroupOrig.Clear();
         if (CanvasPane.IsMouseCaptured) CanvasPane.ReleaseMouseCapture();
+        CanvasHost.InvalidateVisual();
     }
 
     void FinishNestDrag(string panelId, bool fromHold, float sx, float sy)
@@ -3198,19 +5207,43 @@ public partial class MainWindow : Window
 
         if (fromHold)
         {
-            if (ScreenInHoldingBay(sx))
+            if (!_holdPreviewOnSheet)
             {
-                SetStatus($"仍在待用区 · {panelId}");
+                SetStatus(ScreenInHoldingBay(sx)
+                    ? $"仍在待用区 · 请拖到左侧大板上再松开"
+                    : $"请拖到当前大板区域内再松开");
                 return;
             }
             TryReturnHeldToSheet(panelId, panel, sx, sy);
             return;
         }
 
-        // From sheet → holding bay
+        // From sheet → holding bay (whole multi-select group)
         if (ScreenInHoldingBay(sx))
         {
-            MovePlacementToHolding(panelId, panel);
+            var ids = _nestGroupOrig.Count > 1
+                ? _nestGroupOrig.Keys.ToList()
+                : [panelId];
+            var n = 0;
+            foreach (var id in ids)
+            {
+                if (!byId.TryGetValue(id, out var p)) continue;
+                if (MovePlacementToHolding(id, p, refresh: false))
+                    n++;
+            }
+            foreach (var id in ids)
+                _nestSelected.Remove(id);
+            RefreshNestReport();
+            SetStatus(n <= 1
+                ? $"已移入待用区 · {panel.DisplayPartName}"
+                : $"已移入待用区 · {n} 件");
+            CanvasHost.InvalidateVisual();
+            return;
+        }
+
+        if (_nestGroupOrig.Count > 1)
+        {
+            FinishNestGroupDrag(panelId);
             return;
         }
 
@@ -3227,7 +5260,9 @@ public partial class MainWindow : Window
             sw, sh,
             ParseMm(NestSpacingBox.Text, 12), ParseMm(NestBorderBox.Text, 15),
             (_nestOrigOx, _nestOrigOy),
-            AllowOverlapChk.IsChecked == true);
+            AllowOverlapChk.IsChecked == true,
+            PipIgnorePairs());
+        (ox, oy) = ClampPipChild(panelId, panel, ox, oy, place.RotationDeg);
         place.OffsetX = ox;
         place.OffsetY = oy;
         SetStatus($"已移动 · {panel.DisplayPartName}");
@@ -3235,12 +5270,153 @@ public partial class MainWindow : Window
         CanvasHost.InvalidateVisual();
     }
 
-    void MovePlacementToHolding(string panelId, PanelPart panel)
+    void CaptureNestGroupOrig()
     {
+        _nestGroupOrig.Clear();
         if (_nest is null) return;
+        foreach (var id in _nestSelected)
+        {
+            if (_locked.Contains(id)) continue;
+            var place = _nest.Placements.FirstOrDefault(p => p.PanelId == id && p.SheetIndex == _activeNestSheet);
+            if (place is null) continue;
+            _nestGroupOrig[id] = (place.OffsetX, place.OffsetY, place.RotationDeg);
+        }
+        if (_nestDragPanelId is not null && !_nestGroupOrig.ContainsKey(_nestDragPanelId))
+        {
+            var place = _nest.Placements.FirstOrDefault(p => p.PanelId == _nestDragPanelId);
+            if (place is not null)
+                _nestGroupOrig[_nestDragPanelId] = (place.OffsetX, place.OffsetY, place.RotationDeg);
+        }
+        foreach (var slot in _partInPartSlots)
+        {
+            if (!slot.Enabled || !_nestGroupOrig.ContainsKey(slot.HostPanelId)) continue;
+            if (_nestGroupOrig.ContainsKey(slot.ChildPanelId)) continue;
+            if (_locked.Contains(slot.ChildPanelId)) continue;
+            var child = _nest.Placements.FirstOrDefault(p => p.PanelId == slot.ChildPanelId);
+            if (child is null) continue;
+            _nestGroupOrig[slot.ChildPanelId] = (child.OffsetX, child.OffsetY, child.RotationDeg);
+        }
+    }
+
+    void SyncPartListFromNestSelection(string? preferId)
+    {
+        var id = preferId is not null && _nestSelected.Contains(preferId)
+            ? preferId
+            : _nestSelected.FirstOrDefault();
+        var panel = id is null
+            ? null
+            : _session.Package?.Panels.FirstOrDefault(p => p.PanelId == id);
+        _syncingNestSelection = true;
+        try
+        {
+            PartList.SelectedItem = panel;
+            _selected = panel;
+        }
+        finally
+        {
+            _syncingNestSelection = false;
+        }
+    }
+
+    void FinishNestBoxSelect()
+    {
+        if (_nest is not { Ok: true } || _session.Package is null) return;
+        var dx = _nestBoxX1 - _nestBoxX0;
+        var dy = _nestBoxY1 - _nestBoxY0;
+        if (Math.Sqrt(dx * dx + dy * dy) < 3)
+        {
+            if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0)
+            {
+                _nestSelected.Clear();
+                SyncPartListFromNestSelection(null);
+                SetStatus("已取消选中");
+            }
+            CanvasHost.InvalidateVisual();
+            return;
+        }
+
+        var byId = _session.Package.Panels.ToDictionary(p => p.PanelId);
+        var parts = new List<(string Id, double MinX, double MinY, double MaxX, double MaxY)>();
+        foreach (var place in _nest.Placements.Where(p => p.SheetIndex == _activeNestSheet))
+        {
+            if (_locked.Contains(place.PanelId)) continue;
+            if (!byId.TryGetValue(place.PanelId, out var panel)) continue;
+            var box = NestDrag.Aabb(panel, place.OffsetX, place.OffsetY, place.RotationDeg);
+            parts.Add((place.PanelId, box.MinX, box.MinY, box.MaxX, box.MaxY));
+        }
+        var hits = NestDrag.BoxSelect(parts, _nestBoxX0, _nestBoxY0, _nestBoxX1, _nestBoxY1);
+        var additive = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+        if (!additive)
+            _nestSelected.Clear();
+        foreach (var id in hits)
+            _nestSelected.Add(id);
+        SyncPartListFromNestSelection(hits.FirstOrDefault());
+        var crossing = NestDrag.IsCrossingSelect(_nestBoxX0, _nestBoxX1);
+        SetStatus(hits.Count == 0
+            ? (crossing ? "交叉选择：未碰到板件" : "窗口选择：无全包围板件")
+            : _nestSelected.Count == 2
+                ? $"{(crossing ? "交叉" : "窗口")}选择 · 2 件 · 按住 D 看间距"
+                : $"{(crossing ? "交叉" : "窗口")}选择 · {_nestSelected.Count} 件");
+        CanvasHost.InvalidateVisual();
+    }
+
+    void FinishNestGroupDrag(string grabbedId)
+    {
+        if (_nest is null || _session.Package is null) return;
+        var byId = _session.Package.Panels.ToDictionary(p => p.PanelId);
+        var groupIds = _nestGroupOrig.Keys.ToHashSet(StringComparer.Ordinal);
+        var (sw, sh, _) = ActiveSheetMetrics();
+        var spacing = ParseMm(NestSpacingBox.Text, 12);
+        var border = ParseMm(NestBorderBox.Text, 15);
+        var allow = AllowOverlapChk.IsChecked == true;
+        var others = _nest.Placements
+            .Where(p => !groupIds.Contains(p.PanelId))
+            .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
+            .ToList();
+
+        var revert = false;
+        foreach (var id in groupIds)
+        {
+            var place = _nest.Placements.FirstOrDefault(p => p.PanelId == id);
+            if (place is null || !byId.TryGetValue(id, out var panel)) continue;
+            var orig = _nestGroupOrig[id];
+            var (_, _, blocked) = NestDrag.Resolve(
+                panel, id, place.OffsetX, place.OffsetY, place.RotationDeg, place.SheetIndex,
+                others, byId, sw, sh, spacing, border,
+                (orig.Ox, orig.Oy), allow, PipIgnorePairs());
+            if (blocked)
+            {
+                revert = true;
+                break;
+            }
+        }
+        if (revert)
+        {
+            foreach (var (id, orig) in _nestGroupOrig)
+            {
+                var place = _nest.Placements.FirstOrDefault(p => p.PanelId == id);
+                if (place is null) continue;
+                place.OffsetX = orig.Ox;
+                place.OffsetY = orig.Oy;
+                place.RotationDeg = orig.Rot;
+            }
+            SetStatus("冲突，已退回原位");
+        }
+        else
+        {
+            var grabbed = byId.TryGetValue(grabbedId, out var gp) ? gp.DisplayPartName : grabbedId;
+            SetStatus($"已移动 {_nestGroupOrig.Count} 件 · {grabbed}");
+        }
+        RefreshNestReport();
+        CanvasHost.InvalidateVisual();
+    }
+
+    bool MovePlacementToHolding(string panelId, PanelPart panel, bool refresh = true)
+    {
+        if (_nest is null) return false;
         var place = _nest.Placements.FirstOrDefault(p => p.PanelId == panelId);
-        if (place is null) return;
-        var (w, h) = SizeOf(panel);
+        if (place is null) return false;
+        var (w, h) = NestDrag.SizeRotated(panel, place.RotationDeg);
         _nest.Placements.Remove(place);
         _nestHolding.RemoveAll(hld => hld.PanelId == panelId);
         _nestHolding.Add(new HeldNestPart
@@ -3252,76 +5428,70 @@ public partial class MainWindow : Window
             WidthMm = w,
             HeightMm = h,
         });
-        SetStatus($"已移入待用区 · {panel.DisplayPartName}");
-        RefreshNestReport();
-        CanvasHost.InvalidateVisual();
+        if (refresh)
+        {
+            SetStatus($"已移入待用区 · {panel.DisplayPartName}");
+            RefreshNestReport();
+            CanvasHost.InvalidateVisual();
+        }
+        return true;
     }
 
     void TryReturnHeldToSheet(string panelId, PanelPart panel, float sx, float sy)
     {
-        if (_nest is null) return;
-        var held = _nestHolding.FirstOrDefault(h => h.PanelId == panelId);
-        if (held is null) return;
+        if (_nest is null || _session.Package is null) return;
+        var places = _holdPreviewPlaces.ToList();
+        if (places.Count == 0) return;
 
         var sheetKey = ActiveSheetGroupKey();
-        var partKey = NestGroupKey.From(panel.Material, panel.ThicknessMm);
-        if (!sheetKey.Equals(partKey))
+        foreach (var p in places)
         {
+            var held = _nestHolding.FirstOrDefault(h => h.PanelId == p.PanelId);
+            if (held is null) continue;
+            var partKey = NestGroupKey.From(held.Material, held.ThicknessMm);
+            if (SameNestMaterial(partKey, sheetKey)) continue;
             MessageBox.Show(this,
-                $"材料不匹配，不能放回当前大板。\n\n板件：{partKey}\n当前大板：{sheetKey}",
+                $"材料不匹配，不能放回当前大板。\n\n板件：{partKey}\n当前大板 {_activeNestSheet + 1}：{sheetKey}\n\n请先用 ◀ ▶ 切到同材料大板，再拖回。",
                 "待用区",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
-            SetStatus($"材料不符 · {panel.DisplayPartName} ≠ {sheetKey}");
+            SetStatus($"材料不符 · 当前大板是 {sheetKey}");
             return;
         }
 
-        var (mx, my) = ScreenToSheet(sx, sy);
-        var (sw, sh, _) = ActiveSheetMetrics();
-        var rot = held.RotationDeg;
-        var (cx, cy) = NestDrag.ClampOnSheet(
-            panel, NestDrag.SnapMm(mx, 1), NestDrag.SnapMm(my, 1), rot,
-            sw, sh, ParseMm(NestBorderBox.Text, 15));
-        var byId = _session.Package!.Panels.ToDictionary(p => p.PanelId);
-        var others = _nest.Placements
-            .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
-            .ToList();
-        var (ox, oy, blocked) = NestDrag.Resolve(
-            panel, panelId, cx, cy, rot, _activeNestSheet,
-            others, byId,
-            sw, sh,
-            ParseMm(NestSpacingBox.Text, 12), ParseMm(NestBorderBox.Text, 15),
-            (cx, cy),
-            AllowOverlapChk.IsChecked == true);
-        if (blocked && AllowOverlapChk.IsChecked != true)
+        if (_holdPreviewBlocked && AllowOverlapChk.IsChecked != true)
         {
-            SetStatus($"落点冲突，仍留在待用区 · {panel.DisplayPartName}");
+            SetStatus($"位置放不下 · {places.Count} 件仍留在待用区");
             return;
         }
 
-        _nestHolding.RemoveAll(h => h.PanelId == panelId);
-        _nest.Placements.Add(new NestPlacementMsg
+        foreach (var p in places)
         {
-            PanelId = panelId,
-            SheetIndex = _activeNestSheet,
-            OffsetX = ox,
-            OffsetY = oy,
-            RotationDeg = rot,
-        });
-        SetStatus($"已放回大板 {_activeNestSheet + 1} · {panel.DisplayPartName}");
+            _nestHolding.RemoveAll(h => h.PanelId == p.PanelId);
+            _nest.Placements.Add(new NestPlacementMsg
+            {
+                PanelId = p.PanelId,
+                SheetIndex = _activeNestSheet,
+                OffsetX = p.Ox,
+                OffsetY = p.Oy,
+                RotationDeg = p.Rot,
+            });
+            _nestSelected.Add(p.PanelId);
+        }
+        SetStatus(places.Count > 1
+            ? $"已放回大板 {_activeNestSheet + 1} · {places.Count} 件"
+            : $"已放回大板 {_activeNestSheet + 1} · {panel.DisplayPartName}");
         RefreshNestReport();
         CanvasHost.InvalidateVisual();
     }
 
+    static bool SameNestMaterial(NestGroupKey a, NestGroupKey b) =>
+        Math.Abs(a.ThicknessMm - b.ThicknessMm) < 1e-6
+        && string.Equals(a.Material, b.Material, StringComparison.OrdinalIgnoreCase);
+
     NestGroupKey ActiveSheetGroupKey()
     {
-        if (_activeNestSheet >= 0 && _activeNestSheet < _nestSheetsUsed.Count)
-        {
-            var s = _nestSheetsUsed[_activeNestSheet];
-            if (!string.IsNullOrWhiteSpace(s.Material) || s.ThicknessMm > 0)
-                return NestGroupKey.From(s.Material, s.ThicknessMm);
-        }
-        // Infer from parts already on this sheet.
+        // Prefer material of parts already on this sheet (authoritative for "same material").
         if (_nest is { Ok: true } && _session.Package is not null)
         {
             var onSheet = _nest.Placements.FirstOrDefault(p => p.SheetIndex == _activeNestSheet);
@@ -3332,11 +5502,73 @@ public partial class MainWindow : Window
                     return NestGroupKey.From(p.Material, p.ThicknessMm);
             }
         }
+        if (_activeNestSheet >= 0 && _activeNestSheet < _nestSheetsUsed.Count)
+        {
+            var s = _nestSheetsUsed[_activeNestSheet];
+            if (!string.IsNullOrWhiteSpace(s.Material) || s.ThicknessMm > 0)
+                return NestGroupKey.From(s.Material, s.ThicknessMm);
+        }
         return NestGroupKey.From(null, 0);
+    }
+
+    double ActiveSheetBorderMm()
+    {
+        if (_activeNestSheet >= 0 && _activeNestSheet < _nestSheetsUsed.Count)
+            return Math.Max(0, _nestSheetsUsed[_activeNestSheet].BorderMm);
+        return ParseMm(NestBorderBox.Text, 15);
+    }
+
+    double ActiveSheetSpacingMm()
+    {
+        if (_activeNestSheet >= 0 && _activeNestSheet < _nestSheetsUsed.Count
+            && _nestSheetsUsed[_activeNestSheet].SpacingMm > 0)
+            return _nestSheetsUsed[_activeNestSheet].SpacingMm;
+        return ParseMm(NestSpacingBox.Text, 12);
+    }
+
+    (double Ox, double Oy)? FindFreeSlotOnSheet(
+        PanelPart panel,
+        double rotDeg,
+        int sheetIndex,
+        IReadOnlyList<(string PanelId, int SheetIndex, double Ox, double Oy, double Rot)> others,
+        IReadOnlyDictionary<string, PanelPart> byId,
+        double sheetW,
+        double sheetH,
+        double borderMm,
+        double spacingMm)
+    {
+        var box = NestDrag.Aabb(panel, 0, 0, rotDeg);
+        var partW = Math.Max(1, box.MaxX - box.MinX);
+        var partH = Math.Max(1, box.MaxY - box.MinY);
+        const double step = 20;
+        var maxX = sheetW - borderMm - partW;
+        var maxY = sheetH - borderMm - partH;
+        if (maxX < borderMm || maxY < borderMm) return null;
+
+        for (var y = borderMm; y <= maxY + 1e-6; y += step)
+        for (var x = borderMm; x <= maxX + 1e-6; x += step)
+        {
+            var (_, _, blocked) = NestDrag.Resolve(
+                panel, panel.PanelId, x, y, rotDeg, sheetIndex,
+                others, byId, sheetW, sheetH, spacingMm, borderMm,
+                (x, y), allowOverlap: false);
+            if (!blocked) return (x, y);
+        }
+        return null;
     }
 
     bool ScreenInHoldingBay(float sx) =>
         _holdingBayLeft > 0 && sx >= _holdingBayLeft;
+
+    bool ScreenOverNestSheet(float sx, float sy)
+    {
+        if (_nestScale <= 0) return false;
+        var left = _nestPad;
+        var top = _nestPad;
+        var right = _nestPad + _nestSheetW * _nestScale;
+        var bottom = _nestPad + _nestSheetH * _nestScale;
+        return sx >= left && sx <= right && sy >= top && sy <= bottom;
+    }
 
     string? HitTestHolding(float sx, float sy)
     {
@@ -3354,7 +5586,7 @@ public partial class MainWindow : Window
         var w = _surfaceW > 0 ? _surfaceW : Math.Max(1, (int)(CanvasHost.ActualWidth * _dpiX));
         var h = _surfaceH > 0 ? _surfaceH : Math.Max(1, (int)(CanvasHost.ActualHeight * _dpiY));
         var (sw, sh, _) = ActiveSheetMetrics();
-        var bay = CanvasPainter.NestHoldingBayWidth;
+        var bay = _stage == "nest" ? CanvasPainter.NestHoldingBayWidth : 0f;
         var pad = 44f;
         var availW = Math.Max(1f, w - bay - pad);
         var scale = Math.Min(availW / sw, (h - 2 * pad) / sh) * 0.9f;
@@ -3363,7 +5595,7 @@ public partial class MainWindow : Window
         _nestScale = scale;
         _nestSheetW = sw;
         _nestSheetH = sh;
-        _holdingBayLeft = w - bay;
+        _holdingBayLeft = bay > 0 ? w - bay : 0;
     }
 
     string? HitTestNest(float sx, float sy)
@@ -3372,17 +5604,23 @@ public partial class MainWindow : Window
         EnsureNestViewMetrics();
         var byId = _session.Package.Panels.ToDictionary(p => p.PanelId);
         var (lx, ly) = ScreenToSheet(sx, sy);
-        foreach (var place in _nest.Placements.Where(p => p.SheetIndex == _activeNestSheet).Reverse())
+        string? best = null;
+        var bestArea = double.MaxValue;
+        foreach (var place in _nest.Placements.Where(p => p.SheetIndex == _activeNestSheet))
         {
             if (!byId.TryGetValue(place.PanelId, out var panel)) continue;
-            // AABB 鍏堟祴锛堝宸ぇ锛夛紝鍐嶈疆寤?
             var box = NestDrag.Aabb(panel, place.OffsetX, place.OffsetY, place.RotationDeg);
             const double pad = 2;
             if (lx < box.MinX - pad || lx > box.MaxX + pad || ly < box.MinY - pad || ly > box.MaxY + pad)
                 continue;
-            return place.PanelId; // AABB 鍛戒腑鍗冲彲鎷栵紙杞粨鍛戒腑鍦ㄦ棆杞笅鏄撴紡锛?
+            var area = Math.Max(1, (box.MaxX - box.MinX) * (box.MaxY - box.MinY));
+            if (area < bestArea)
+            {
+                bestArea = area;
+                best = place.PanelId;
+            }
         }
-        return null;
+        return best;
     }
 
     (double Mx, double My) ScreenToSheet(float sx, float sy)
@@ -3420,10 +5658,15 @@ public partial class MainWindow : Window
             canvas.Clear(SKColors.White);
             return;
         }
-        if (_showNest && _stage is "nest" or "ops")
+        if (_stage == "out" && !_showNest)
+        {
+            canvas.Clear(SKColors.White);
+            return;
+        }
+        if (_showNest && _stage is "nest" or "ops" or "out")
         {
             var (sw, sh, _) = ActiveSheetMetrics();
-            var bay = CanvasPainter.NestHoldingBayWidth;
+            var bay = _stage == "nest" ? CanvasPainter.NestHoldingBayWidth : 0f;
             var pad = 44f;
             var availW = Math.Max(1f, e.Info.Width - bay - pad);
             var scale = Math.Min(availW / sw, (e.Info.Height - 2 * pad) / sh) * 0.9f;
@@ -3432,42 +5675,117 @@ public partial class MainWindow : Window
             _nestScale = scale;
             _nestSheetW = sw;
             _nestSheetH = sh;
-            _holdingBayLeft = e.Info.Width - bay;
+            _holdingBayLeft = bay > 0 ? e.Info.Width - bay : 0;
 
             var placements = _nest is { Ok: true } ? _nest.Placements.ToList() : [];
             var panels = _session.Package?.Panels.ToList() ?? [];
             var byId = panels.ToDictionary(p => p.PanelId, StringComparer.Ordinal);
-            var holdCards = _nestHolding.Select(h =>
+            if (bay > 0)
             {
-                byId.TryGetValue(h.PanelId, out var p);
-                var title = p?.DisplayPartName ?? h.PanelId;
-                var detail = $"{h.WidthMm:0.#}×{h.HeightMm:0.#}";
-                IReadOnlyList<(double X, double Y)> outline = p?.Outline.Points is { Count: >= 2 } pts
-                    ? pts.Select(pt => (pt.X, pt.Y)).ToList()
-                    : [(0, 0), (h.WidthMm, 0), (h.WidthMm, h.HeightMm), (0, h.HeightMm)];
-                return (h.PanelId, title, detail, outline);
-            }).ToList();
-            _holdingLayout = CanvasPainter.LayoutHoldingItems(
-                holdCards, _holdingBayLeft, bay, e.Info.Height);
+                var holdCards = _nestHolding.Select(h =>
+                {
+                    byId.TryGetValue(h.PanelId, out var p);
+                    var title = p?.DisplayPartName ?? h.PanelId;
+                    var detail = $"{h.WidthMm:0.#}×{h.HeightMm:0.#}";
+                    var key = NestGroupKey.From(h.Material, h.ThicknessMm);
+                    var groupLabel = p?.MaterialGroupLabel ?? key.ToString();
+                    IReadOnlyList<(double X, double Y)> outline = p?.Outline.Points is { Count: >= 2 } pts
+                        ? NestTransform.RotatedOutline(
+                            pts.Select(pt => (pt.X, pt.Y)).ToList(),
+                            h.RotationDeg)
+                        : [(0, 0), (h.WidthMm, 0), (h.WidthMm, h.HeightMm), (0, h.HeightMm)];
+                    return (h.PanelId, title, detail, outline, key.ToString(), groupLabel);
+                }).ToList();
+                (_holdingLayout, _holdingRegions) = CanvasPainter.LayoutHoldingItems(
+                    holdCards, _holdingBayLeft, bay, e.Info.Height);
+            }
+            else
+            {
+                _holdingLayout = [];
+                _holdingRegions = [];
+            }
 
             _guillotineBySheet.TryGetValue(_activeNestSheet, out var guill);
+            (double X, double Y)? dragFrom = null;
+            (double X, double Y)? dragTo = null;
+            if (_dragMode == "nest"
+                && !_nestDragFromHold
+                && _nestDragPanelId is not null
+                && AltIsDown())
+            {
+                var dragPlace = placements.FirstOrDefault(p => p.PanelId == _nestDragPanelId);
+                if (dragPlace is not null && byId.TryGetValue(_nestDragPanelId, out var dragPanel))
+                {
+                    var (pw, ph) = NestDrag.SizeRotated(dragPanel, _nestDragRotDeg);
+                    dragFrom = (_nestOrigOx + pw * 0.5, _nestOrigOy + ph * 0.5);
+                    dragTo = (dragPlace.OffsetX + pw * 0.5, dragPlace.OffsetY + ph * 0.5);
+                }
+            }
+
+            (double X, double Y)? measureFrom = null;
+            (double X, double Y)? measureTo = null;
+            if (IsActive
+                && DIsDown()
+                && !IsTypingTarget()
+                && _nestSelected.Count == 2)
+            {
+                var ids = _nestSelected.ToList();
+                var place0 = placements.FirstOrDefault(p =>
+                    p.PanelId == ids[0] && p.SheetIndex == _activeNestSheet);
+                var place1 = placements.FirstOrDefault(p =>
+                    p.PanelId == ids[1] && p.SheetIndex == _activeNestSheet);
+                if (place0 is not null && place1 is not null
+                    && byId.TryGetValue(ids[0], out var pan0)
+                    && byId.TryGetValue(ids[1], out var pan1)
+                    && pan0.Outline.Points.Count >= 2
+                    && pan1.Outline.Points.Count >= 2)
+                {
+                    var ring0 = NestTransform.SheetOutline(
+                        pan0, place0.OffsetX, place0.OffsetY, place0.RotationDeg);
+                    var ring1 = NestTransform.SheetOutline(
+                        pan1, place1.OffsetX, place1.OffsetY, place1.RotationDeg);
+                    var pair = PolygonDistance.Closest(ring0, ring1);
+                    if (!double.IsNaN(pair.Distance))
+                    {
+                        measureFrom = (pair.A.X, pair.A.Y);
+                        measureTo = (pair.B.X, pair.B.Y);
+                    }
+                }
+            }
+
             CanvasPainter.PaintNest(canvas, e.Info.Width, e.Info.Height, panels, placements,
                 new CanvasPainter.NestPaintOpts(
                     sw, sh, pad, scale,
-                    _selected?.PanelId,
+                    _stage == "out" ? null : _selected?.PanelId,
                     _locked,
                     CurrentConflicts(),
-                    _opsOverlay,
-                    ShowOps: _stage == "ops",
+                    _stage == "out" ? (_exportSelected?.Ops ?? []) : _opsOverlay,
+                    ShowOps: _stage is "ops" or "out",
                     ActiveCamFrame: _stage == "ops" && _camFrames.Count > 0
                         ? _camFrames[_camFrameIndex]
                         : null,
                     ActiveSheetIndex: _activeNestSheet,
-                    GuillotinePolyline: guill?.Polyline,
-                    GuillotineLabel: guill?.Label,
-                    HoldingBayLeft: _holdingBayLeft,
+                    GuillotinePolyline: _stage == "out" ? null : guill?.Polyline,
+                    GuillotineLabel: _stage == "out" ? null : guill?.Label,
+                    HoldingBayLeft: _stage == "nest" ? _holdingBayLeft : 0,
                     HoldingItems: _holdingLayout,
-                    HoldingDragId: _nestDragFromHold ? _nestDragPanelId : null));
+                    HoldingRegions: _holdingRegions,
+                    HoldingDragId: _nestDragFromHold ? _nestDragPanelId : null,
+                    HoldPreviews: _holdPreviewOnSheet ? _holdPreviewPlaces : null,
+                    HoldPreviewBlocked: _holdPreviewBlocked,
+                    DragGuideFrom: dragFrom,
+                    DragGuideTo: dragTo,
+                    MeasureFrom: measureFrom,
+                    MeasureTo: measureTo,
+                    SelectedIds: _stage == "out" ? null : _nestSelected,
+                    SelectionBox: _dragMode == "nestBox"
+                        ? (_nestBoxX0, _nestBoxY0, _nestBoxX1, _nestBoxY1)
+                        : null,
+                    SelectionCrossing: _dragMode == "nestBox"
+                        && NestDrag.IsCrossingSelect(_nestBoxX0, _nestBoxX1),
+                    HighlightPass: _stage == "out" ? null : _opsFocus,
+                    HighlightStrategy: _stage == "out" ? null : _opsStrategy,
+                    Bridges: _stage == "out" ? [] : _profileBridges));
             return;
         }
 

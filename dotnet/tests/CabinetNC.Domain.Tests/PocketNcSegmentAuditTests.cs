@@ -6,11 +6,8 @@ namespace CabinetNC.Domain.Tests;
 public class PocketNcSegmentAuditTests
 {
     [Fact]
-    public void PocketClearer_exposes_disjoint_scan_segments()
+    public void PocketClearer_spiral_fill_then_finish_loop()
     {
-        // Wide pocket so a scan line can yield multiple X intervals after inset
-        // (U-shape via outline with a notch — use a simple rect first and assert
-        // consecutive scan rows are separate segments, not one polyline).
         var outline = new (double X, double Y)[]
         {
             (0, 0), (200, 0), (200, 100), (0, 100),
@@ -22,10 +19,21 @@ public class PocketNcSegmentAuditTests
             StepoverMm = 8,
             OnionSkinMm = 0.5,
         });
-        Assert.True(result.Segments.Count >= 2, $"segments={result.Segments.Count}");
-        Assert.All(result.Segments.Take(result.Segments.Count - (result.FinishLoop is null ? 0 : 0)),
-            s => Assert.True(s.Count >= 2));
-        // Zigzag fill segments must not include the finish loop points mixed as continuous G1 chain marker
+        Assert.True(result.Segments.Count >= 1, $"segments={result.Segments.Count}");
+        var fill = result.Segments[0];
+        Assert.True(fill.Count >= 8, $"spiral pts={fill.Count}");
+        var horiz = 0;
+        var edges = 0;
+        for (var i = 1; i < fill.Count; i++)
+        {
+            var dx = Math.Abs(fill[i].X - fill[i - 1].X);
+            var dy = Math.Abs(fill[i].Y - fill[i - 1].Y);
+            if (dx + dy < 0.05) continue;
+            edges++;
+            if (dy < 0.25 && dx > 1) horiz++;
+        }
+        Assert.True(edges > 0);
+        Assert.True(horiz < edges * 0.85, $"raster-like horiz={horiz}/{edges}");
         Assert.NotNull(result.FinishLoop);
         Assert.True(result.FinishLoop!.Count >= 3);
     }

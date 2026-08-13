@@ -157,6 +157,109 @@ public static class PartsInPartPacker
         };
     }
 
+    /// <summary>
+    /// Translate each 套裁 cluster so its union AABB is centered in the host void.
+    /// Keeps relative gaps and rotations. Locked children are left in place.
+    /// Returns how many children moved.
+    /// </summary>
+    public static int CenterInVoids(
+        List<NestPlacement> work,
+        IReadOnlyDictionary<string, Panel> byPanel,
+        IReadOnlyList<PartInPartSlot>? slots,
+        int sheetIndex,
+        double clearanceMm,
+        IReadOnlySet<string>? locked = null,
+        List<string>? reasons = null)
+    {
+        if (slots is not { Count: > 0 }) return 0;
+
+        var lockedSet = locked ?? new HashSet<string>(StringComparer.Ordinal);
+        var byId = work.ToDictionary(p => p.PanelId, StringComparer.Ordinal);
+        var moved = 0;
+
+        foreach (var group in slots
+                     .Where(s => s.Enabled && s.SheetIndex == sheetIndex)
+                     .GroupBy(s => (s.HostPanelId, Feat: s.FeatureId ?? "")))
+        {
+            var hostId = group.Key.HostPanelId;
+            if (!byId.TryGetValue(hostId, out var hostPlace)) continue;
+            if (hostPlace.SheetIndex != sheetIndex) continue;
+            if (!byPanel.TryGetValue(hostId, out var hostPanel)) continue;
+
+            var featureId = string.IsNullOrEmpty(group.Key.Feat) ? null : group.Key.Feat;
+            if (!TryUsableVoid(
+                    hostPanel, hostPlace.OffsetX, hostPlace.OffsetY, hostPlace.RotationDeg,
+                    featureId, clearanceMm,
+                    out var vx, out var vy, out var vw, out var vh))
+            {
+                reasons?.Add($"pip-center-skip:{hostId}:no-void");
+                continue;
+            }
+
+            var children = new List<(NestPlacement Place, double W, double H)>();
+            foreach (var slot in group)
+            {
+                if (lockedSet.Contains(slot.ChildPanelId)) continue;
+                if (!byId.TryGetValue(slot.ChildPanelId, out var childPlace)) continue;
+                if (childPlace.SheetIndex != sheetIndex) continue;
+                if (!byPanel.TryGetValue(slot.ChildPanelId, out var childPanel)) continue;
+                var (w, h) = NestDrag.SizeRotated(childPanel, childPlace.RotationDeg);
+                if (w <= 0 || h <= 0) continue;
+                children.Add((childPlace, w, h));
+            }
+            if (children.Count == 0) continue;
+
+            double minX = double.MaxValue, minY = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var (place, w, h) in children)
+            {
+                minX = Math.Min(minX, place.OffsetX);
+                minY = Math.Min(minY, place.OffsetY);
+                maxX = Math.Max(maxX, place.OffsetX + w);
+                maxY = Math.Max(maxY, place.OffsetY + h);
+            }
+
+            var clusterW = maxX - minX;
+            var clusterH = maxY - minY;
+            if (clusterW > vw + 1e-6 || clusterH > vh + 1e-6)
+            {
+                reasons?.Add($"pip-center-skip:{hostId}:cluster-exceeds-void");
+                continue;
+            }
+
+            var targetMinX = vx + (vw - clusterW) / 2;
+            var targetMinY = vy + (vh - clusterH) / 2;
+            var dx = targetMinX - minX;
+            var dy = targetMinY - minY;
+            if (Math.Abs(dx) < 0.2 && Math.Abs(dy) < 0.2)
+            {
+                reasons?.Add($"pip-center-skip:{hostId}:already-centered");
+                continue;
+            }
+
+            foreach (var (place, _, _) in children)
+            {
+                var idx = work.FindIndex(p =>
+                    string.Equals(p.PanelId, place.PanelId, StringComparison.Ordinal));
+                if (idx < 0) continue;
+                var next = new NestPlacement
+                {
+                    PanelId = place.PanelId,
+                    SheetIndex = place.SheetIndex,
+                    OffsetX = place.OffsetX + dx,
+                    OffsetY = place.OffsetY + dy,
+                    RotationDeg = place.RotationDeg,
+                };
+                work[idx] = next;
+                byId[place.PanelId] = next;
+                moved++;
+            }
+            reasons?.Add($"pip-center:{hostId} n={children.Count} dx={dx:0.#} dy={dy:0.#}");
+        }
+
+        return moved;
+    }
+
     public static HashSet<(string A, string B)> IgnoreCollisionPairs(IEnumerable<PartInPartSlot> slots)
     {
         var set = new HashSet<(string, string)>();
@@ -167,6 +270,64 @@ public static class PartsInPartPacker
             set.Add((s.ChildPanelId, s.HostPanelId));
         }
         return set;
+    }
+
+    /// <summary>
+    /// Usable opening of a host cutout in sheet coordinates (inset by clearance).
+    /// </summary>
+    public static bool TryUsableVoid(
+        Panel host,
+        double hostOx,
+        double hostOy,
+        double hostRotDeg,
+        string? featureId,
+        double clearanceMm,
+        out double minX,
+        out double minY,
+        out double width,
+        out double height)
+    {
+        minX = minY = width = height = 0;
+        var hostBounds = NestTransform.BoundsOf(host);
+        var inset = Math.Max(0, clearanceMm);
+        (double MinX, double MinY, double W, double H)? best = null;
+        foreach (var f in host.Features)
+        {
+            if (!PanelEdit.IsCutout(f)) continue;
+            if (featureId is not null
+                && !string.Equals(f.FeatureId, featureId, StringComparison.Ordinal))
+                continue;
+            var ring = f.Path ?? f.Profile;
+            if (ring is not { Count: >= 3 }) continue;
+
+            double x0 = double.MaxValue, y0 = double.MaxValue;
+            double x1 = double.MinValue, y1 = double.MinValue;
+            foreach (var pt in ring)
+            {
+                var (sx, sy) = NestTransform.ToSheet(
+                    pt.X, pt.Y, hostBounds,
+                    hostOx, hostOy, hostRotDeg);
+                x0 = Math.Min(x0, sx);
+                y0 = Math.Min(y0, sy);
+                x1 = Math.Max(x1, sx);
+                y1 = Math.Max(y1, sy);
+            }
+
+            var ux0 = x0 + inset;
+            var uy0 = y0 + inset;
+            var uw = (x1 - inset) - ux0;
+            var uh = (y1 - inset) - uy0;
+            if (uw < MinVoidMm || uh < MinVoidMm) continue;
+            if (best is null || uw * uh > best.Value.W * best.Value.H)
+                best = (ux0, uy0, uw, uh);
+            if (featureId is not null) break;
+        }
+        if (best is null) return false;
+        minX = best.Value.MinX;
+        minY = best.Value.MinY;
+        width = best.Value.W;
+        height = best.Value.H;
+        return true;
     }
 
     static NestResult WithSlots(NestResult primary, IReadOnlyList<PartInPartSlot> slots) =>

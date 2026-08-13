@@ -24,7 +24,7 @@ public class SheetToolSplitNcTests
             },
             new PanelFeature
             {
-                FeatureId = "G1", Kind = "grooveVertical",
+                FeatureId = "G1", Kind = "grooveVertical", Purpose = "tongue",
                 DepthMm = 6,
                 Path = [new(20, 20), new(160, 20)],
             },

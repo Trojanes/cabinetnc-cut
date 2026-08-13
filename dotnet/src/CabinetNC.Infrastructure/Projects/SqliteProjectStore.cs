@@ -35,11 +35,13 @@ public sealed class SqliteProjectStore
               machine_id TEXT NOT NULL,
               nest_json TEXT,
               nc_text TEXT,
+              session_json TEXT,
               updated_at TEXT NOT NULL
             );
             """;
         cmd.ExecuteNonQuery();
         EnsureColumn(conn, "project", "source_snapshot_json", "TEXT");
+        EnsureColumn(conn, "project", "session_json", "TEXT");
     }
 
     public void Save(string dbPath, ProjectDocument doc)
@@ -58,8 +60,8 @@ public sealed class SqliteProjectStore
             cmd.Transaction = tx;
             cmd.CommandText =
                 """
-                INSERT INTO project (id, name, package_json, source_snapshot_json, machine_id, nest_json, nc_text, updated_at)
-                VALUES (1, $name, $pkg, $sourceSnapshot, $machine, $nest, $nc, $updated);
+                INSERT INTO project (id, name, package_json, source_snapshot_json, machine_id, nest_json, nc_text, session_json, updated_at)
+                VALUES (1, $name, $pkg, $sourceSnapshot, $machine, $nest, $nc, $session, $updated);
                 """;
             cmd.Parameters.AddWithValue("$name", doc.Name);
             cmd.Parameters.AddWithValue("$pkg", doc.PackageJson);
@@ -67,6 +69,7 @@ public sealed class SqliteProjectStore
             cmd.Parameters.AddWithValue("$machine", doc.MachineId);
             cmd.Parameters.AddWithValue("$nest", (object?)doc.NestPlacementsJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$nc", (object?)doc.NcText ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$session", (object?)doc.SessionJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$updated", doc.UpdatedAt.ToString("O"));
             cmd.ExecuteNonQuery();
         }
@@ -76,10 +79,11 @@ public sealed class SqliteProjectStore
     public ProjectDocument? Load(string dbPath)
     {
         if (!File.Exists(dbPath)) return null;
+        EnsureSchema(dbPath);
         using var conn = Open(dbPath);
         using var cmd = conn.CreateCommand();
         cmd.CommandText =
-            "SELECT name, package_json, source_snapshot_json, machine_id, nest_json, nc_text, updated_at FROM project WHERE id = 1;";
+            "SELECT name, package_json, source_snapshot_json, machine_id, nest_json, nc_text, updated_at, session_json FROM project WHERE id = 1;";
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;
         return new ProjectDocument
@@ -91,6 +95,7 @@ public sealed class SqliteProjectStore
             NestPlacementsJson = reader.IsDBNull(4) ? null : reader.GetString(4),
             NcText = reader.IsDBNull(5) ? null : reader.GetString(5),
             UpdatedAt = DateTimeOffset.TryParse(reader.GetString(6), out var t) ? t : DateTimeOffset.UtcNow,
+            SessionJson = reader.FieldCount > 7 && !reader.IsDBNull(7) ? reader.GetString(7) : null,
         };
     }
 

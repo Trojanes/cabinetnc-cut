@@ -44,7 +44,7 @@ public sealed class PostProcessorServiceImpl : PostProcessor.PostProcessorBase
             var profile = MachineCatalog.Get(request.MachineId);
             var ops = OpsPlanner.AttachToNest(OpsPlanner.FeaturesToOps(panels), placements).ToList();
 
-            var nc = NcEmitter.OpsToNc(ops, profile);
+            var nc = NcEmitter.OpsToNc(ops, profile, recipe: PostRecipe.TroyDefault());
             var lines = nc.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
             return Task.FromResult(new GenerateNcReply
             {

@@ -10,6 +10,30 @@ public class PocketClearerTests
         [(0, 0), (w, 0), (w, h), (0, h)];
 
     [Fact]
+    public void Clear_uses_spiral_not_horizontal_raster()
+    {
+        var result = PocketClearer.Clear(new PocketClearer.PocketClearRequest
+        {
+            Outline = Rect(120, 80),
+            ToolDiameterMm = 6.35,
+            StepoverMm = 4,
+        });
+        Assert.True(result.Segments.Count >= 1);
+        var fill = result.Segments[0];
+        var turn = 0;
+        for (var i = 2; i < fill.Count; i++)
+        {
+            var ax = fill[i - 1].X - fill[i - 2].X;
+            var ay = fill[i - 1].Y - fill[i - 2].Y;
+            var bx = fill[i].X - fill[i - 1].X;
+            var by = fill[i].Y - fill[i - 1].Y;
+            if (ax * by - ay * bx is > 0.05 or < -0.05)
+                turn++;
+        }
+        Assert.True(turn >= 8, $"spiral turns={turn} pts={fill.Count}");
+    }
+
+    [Fact]
     public void Clear_path_has_many_more_points_than_boundary()
     {
         var boundary = Rect(120, 80);

@@ -1,5 +1,6 @@
 namespace CabinetNC.Domain.Nesting;
 
+using CabinetNC.Domain.Geometry;
 using CabinetNC.Domain.Parts;
 
 public readonly record struct LocalBounds(double MinX, double MinY, double MaxX, double MaxY);
@@ -48,6 +49,35 @@ public static class NestTransform
         var minX = corners.Min(p => p.X);
         var minY = corners.Min(p => p.Y);
         return (rx - minX + offsetX, ry - minY + offsetY);
+    }
+
+    /// <summary>Panel outline mapped into sheet space (same transform as nest painting).</summary>
+    public static IReadOnlyList<Point2> SheetOutline(
+        Panel panel, double offsetX, double offsetY, double rotationDeg)
+    {
+        var pts = panel.Outline.Points;
+        if (pts.Count == 0) return [];
+        var bounds = BoundsOf(panel);
+        var list = new List<Point2>(pts.Count);
+        foreach (var pt in pts)
+        {
+            var (x, y) = ToSheet(pt.X, pt.Y, bounds, offsetX, offsetY, rotationDeg);
+            list.Add(new Point2(x, y));
+        }
+        return list;
+    }
+
+    /// <summary>Panel-local outline rotated the same way as sheet placement (AABB rebased to origin).</summary>
+    public static IReadOnlyList<(double X, double Y)> RotatedOutline(
+        IReadOnlyList<(double X, double Y)> points,
+        double rotationDeg)
+    {
+        var list = points.ToList();
+        if (list.Count < 2) return list;
+        var r = ((int)Math.Round(rotationDeg) % 360 + 360) % 360;
+        if (r == 0) return list;
+        var bounds = BoundsOf(list);
+        return list.Select(p => ToSheet(p.X, p.Y, bounds, 0, 0, r)).ToList();
     }
 
     static (double X, double Y) Rotate(double x, double y, double c, double s) =>

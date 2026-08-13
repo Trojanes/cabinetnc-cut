@@ -183,10 +183,10 @@ class SmokeSuite:
 
     def test_nest_and_nc(self) -> None:
         self.control("TabNest", "TabItem").click_input()
-        self.click("NestNcBtn", "Button")
+        self.click("NestApplyBtn", "Button")
         report = self.window.child_window(auto_id="NestReportMeta", control_type="Text")
         self.wait_for(
-            lambda: "placed:" in report.window_text(),
+            lambda: "已排" in report.window_text(),
             "nest completion report missing",
             timeout=45,
         )
@@ -199,14 +199,7 @@ class SmokeSuite:
 
     def test_cam_playhead_and_offset(self) -> None:
         self.control("TabOps", "TabItem").click_input()
-        nc_control = self.control("NcPreview", "Edit")
-        self.wait_for(lambda: "G21" in nc_control.window_text(), "NC was not generated")
-        offset = self.control("CamOffsetChk", "CheckBox")
-        if offset.get_toggle_state() == 0:
-            offset.click_input()
-        nc = nc_control.window_text()
-        assert "X-" not in nc and "Y-" not in nc, "offset NC contains negative sheet XY"
-        assert len(nc.splitlines()) > 100, "NC output unexpectedly small"
+        self.click("OpsCalcBtn", "Button")
         play = self.control("CamPlayBtn", "Button")
         meta = self.window.child_window(auto_id="CamSimMeta", control_type="Text")
         before = meta.window_text()
@@ -216,6 +209,12 @@ class SmokeSuite:
         after = meta.window_text()
         assert after and "/" in after and "@(" in after
         assert before != after, "CAM playhead did not advance"
+        self.control("TabOut", "TabItem").click_input()
+        nc_control = self.control("NcPreview", "Edit")
+        self.wait_for(lambda: "G21" in nc_control.window_text(), "NC was not generated")
+        nc = nc_control.window_text()
+        assert "X-" not in nc and "Y-" not in nc, "offset NC contains negative sheet XY"
+        assert len(nc.splitlines()) > 100, "NC output unexpectedly small"
 
     def test_tool_drives_cam(self) -> None:
         self.click("ModProcessBtn", "Button")

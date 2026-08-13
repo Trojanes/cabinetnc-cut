@@ -23,7 +23,7 @@ public class CamSafetyTests
             new PanelFeature
             {
                 FeatureId = "H1", Kind = "holeVertical",
-                X = 30, Y = 30, DiameterMm = 5, DepthMm = th - 2,
+                X = 30, Y = 30, DiameterMm = 3, DepthMm = th - 2,
             },
             new PanelFeature
             {

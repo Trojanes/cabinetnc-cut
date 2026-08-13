@@ -55,7 +55,7 @@ public class PipelineAndStressTests
             new PanelFeature
             {
                 FeatureId = "H1", Kind = "holeVertical",
-                X = w * 0.25, Y = h * 0.25, DiameterMm = 5, DepthMm = th - 2,
+                X = w * 0.25, Y = h * 0.25, DiameterMm = 3, DepthMm = th - 2,
             },
         ],
         Identity = new WorkpieceIdentity { WorkpieceId = id, ModuleId = "M", ProjectId = "P" },
@@ -82,7 +82,7 @@ public class PipelineAndStressTests
         Assert.True(gate.Ok, string.Join("; ", gate.Errors));
 
         var ops = OpsPlanner.AttachToNest(OpsPlanner.FeaturesToOps(panels), nest.Placements);
-        Assert.Contains(ops, o => o.ToolId == "T1");
+        Assert.Contains(ops, o => o.ToolId == "T2");
         Assert.Contains(ops, o => o.Op == "drill" && o.ToolId == "T3");
         var ordered = CamSafety.OrderSafe(ops.Where(o => o.PanelId == "A")).ToList();
         var outer = ordered.FindIndex(o => o.Op == "contour" && o.FeatureId is null);
