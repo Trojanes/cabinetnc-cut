@@ -84,7 +84,7 @@ class SmokeSuite:
             check=False,
         )
         self.app = Application(backend="uia").start(str(self.exe))
-        self.window = self.app.window(title="CabinetNC Cut")
+        self.window = self.app.window(title="OmniCam")
         self.window.wait("visible", timeout=self.timeout)
         self.window.set_focus()
 

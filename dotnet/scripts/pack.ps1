@@ -53,7 +53,7 @@ start "" "%APP_DIR%CabinetNC.Desktop.exe"
 
 # Short readme
 @"
-CabinetNC Cut
+OmniCam
 Built: $stamp
 
 Run:

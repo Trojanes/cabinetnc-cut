@@ -13,6 +13,9 @@ public sealed class StockMaterialKindVm : INotifyPropertyChanged
     string _borderMmText = "15";
     bool _allowRotate90 = true;
     bool _allowPartsInPart;
+    bool _useLeftoverPieces;
+    string _leftoverXMmText = "";
+    string _leftoverYMmText = "";
 
     public required string MaterialId { get; init; }
     public required string Label { get; init; }
@@ -90,10 +93,58 @@ public sealed class StockMaterialKindVm : INotifyPropertyChanged
         }
     }
 
+    public bool UseLeftoverPieces
+    {
+        get => _useLeftoverPieces;
+        set
+        {
+            if (_useLeftoverPieces == value) return;
+            _useLeftoverPieces = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LeftoverHint));
+        }
+    }
+
+    public string LeftoverXMmText
+    {
+        get => _leftoverXMmText;
+        set
+        {
+            if (_leftoverXMmText == value) return;
+            _leftoverXMmText = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LeftoverHint));
+        }
+    }
+
+    public string LeftoverYMmText
+    {
+        get => _leftoverYMmText;
+        set
+        {
+            if (_leftoverYMmText == value) return;
+            _leftoverYMmText = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LeftoverHint));
+        }
+    }
+
+    public string LeftoverHint =>
+        !UseLeftoverPieces
+            ? "第一张用余料（贴原点）；放不下再开整张大板"
+            : HasLeftoverSheet
+                ? $"第一张 {LeftoverXMm:0.#}×{LeftoverYMm:0.#} 贴原点 · 大板边距只落在外沿"
+                : "填余料 X / Y，第一张贴原点";
+
+    public bool HasLeftoverSheet =>
+        UseLeftoverPieces && LeftoverXMm > 0 && LeftoverYMm > 0;
+
     public double WidthMm => ParsePositive(_widthMmText, 1220);
     public double LengthMm => ParsePositive(_lengthMmText, 2440);
     public double SpacingMm => ParseNonNegative(_spacingMmText, 12);
     public double BorderMm => ParseNonNegative(_borderMmText, 15);
+    public double LeftoverXMm => ParsePositive(_leftoverXMmText, 0);
+    public double LeftoverYMm => ParsePositive(_leftoverYMmText, 0);
 
     static double ParsePositive(string text, double fallback) =>
         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0

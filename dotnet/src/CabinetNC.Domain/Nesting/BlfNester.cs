@@ -1,10 +1,24 @@
 namespace CabinetNC.Domain.Nesting;
 
+public readonly record struct SheetInsets(double Left, double Bottom, double Right, double Top)
+{
+    public static SheetInsets Uniform(double mm)
+    {
+        var v = Math.Max(0, mm);
+        return new SheetInsets(v, v, v, v);
+    }
+}
+
 public sealed class NestSheetSpec
 {
     public double WidthMm { get; init; } = 1220;
     public double LengthMm { get; init; } = 2440;
     public double BorderMm { get; init; } = 15;
+    /// <summary>When set, overrides <see cref="BorderMm"/> on that side (leftover = full-sheet edge projected).</summary>
+    public double? InsetLeftMm { get; init; }
+    public double? InsetBottomMm { get; init; }
+    public double? InsetRightMm { get; init; }
+    public double? InsetTopMm { get; init; }
     /// <summary>Part-to-part clearance for this stock kind. Used when packing this material group.</summary>
     public double SpacingMm { get; init; } = 12;
     /// <summary>Allow 90° nest rotation for panels on this stock kind (still subject to grain lock).</summary>
@@ -16,6 +30,70 @@ public sealed class NestSheetSpec
     public string? Label { get; init; }
     public string? Material { get; init; }
     public double ThicknessMm { get; init; }
+
+    public SheetInsets Insets()
+    {
+        var fallback = Math.Max(0, BorderMm);
+        return new SheetInsets(
+            Math.Max(0, InsetLeftMm ?? fallback),
+            Math.Max(0, InsetBottomMm ?? fallback),
+            Math.Max(0, InsetRightMm ?? fallback),
+            Math.Max(0, InsetTopMm ?? fallback));
+    }
+
+    public (double X, double Y, double W, double H) InnerRect()
+    {
+        var i = Insets();
+        return (
+            i.Left,
+            i.Bottom,
+            Math.Max(0, WidthMm - i.Left - i.Right),
+            Math.Max(0, LengthMm - i.Bottom - i.Top));
+    }
+
+    public bool FitsLocalSize(double partW, double partH)
+    {
+        var (_, _, w, h) = InnerRect();
+        return partW <= w + 1e-6 && partH <= h + 1e-6;
+    }
+
+    public bool ContainsBox(double minX, double minY, double maxX, double maxY, double slack = 0.05)
+    {
+        var i = Insets();
+        return minX >= i.Left - slack
+               && minY >= i.Bottom - slack
+               && maxX <= WidthMm - i.Right + slack
+               && maxY <= LengthMm - i.Top + slack;
+    }
+
+    /// <summary>Leftover stuck at full-sheet origin: keep full-sheet edge only on sides that still are the outer edge.</summary>
+    public static NestSheetSpec LeftoverAtOrigin(
+        double leftoverW,
+        double leftoverH,
+        double fullW,
+        double fullH,
+        double edgeMm,
+        NestSheetSpec style)
+    {
+        var edge = Math.Max(0, edgeMm);
+        const double tol = 0.5;
+        return new NestSheetSpec
+        {
+            WidthMm = leftoverW,
+            LengthMm = leftoverH,
+            BorderMm = edge,
+            InsetLeftMm = edge,
+            InsetBottomMm = edge,
+            InsetRightMm = leftoverW >= fullW - tol ? edge : 0,
+            InsetTopMm = leftoverH >= fullH - tol ? edge : 0,
+            SpacingMm = style.SpacingMm,
+            AllowRotation = style.AllowRotation,
+            AllowPartsInPart = style.AllowPartsInPart,
+            Label = $"leftover {leftoverW:0.#}×{leftoverH:0.#}",
+            Material = style.Material,
+            ThicknessMm = style.ThicknessMm,
+        };
+    }
 }
 
 public sealed class NestBlockedRect
@@ -138,12 +216,10 @@ public static class BlfNester
             for (var attempt = 0; attempt < sheetQueue.Count + items.Count + 2 && !placed; attempt++)
             {
                 var spec = sheetQueue[Math.Min(sheetIndex, sheetQueue.Count - 1)];
-                var innerW = spec.WidthMm - spec.BorderMm * 2;
-                var innerH = spec.LengthMm - spec.BorderMm * 2;
                 var orients = new List<(double w, double h, double rot)> { (item.WidthMm, item.HeightMm, 0) };
                 if (req.AllowRotation && item.MayRotate && Math.Abs(item.WidthMm - item.HeightMm) > 1e-6)
                     orients.Add((item.HeightMm, item.WidthMm, 90));
-                orients = orients.Where(o => o.w <= innerW && o.h <= innerH).ToList();
+                orients = orients.Where(o => spec.FitsLocalSize(o.w, o.h)).ToList();
                 if (orients.Count == 0)
                 {
                     unplaced.Add(item.PanelId);
@@ -218,22 +294,25 @@ public static class BlfNester
             WidthMm = s.WidthMm,
             LengthMm = s.LengthMm,
             BorderMm = s.BorderMm,
+            InsetLeftMm = s.InsetLeftMm,
+            InsetBottomMm = s.InsetBottomMm,
+            InsetRightMm = s.InsetRightMm,
+            InsetTopMm = s.InsetTopMm,
             Blocked = [], // ponytail: cloned sheets have no defects
             Label = s.Label,
         };
 
     static List<Rect> InitFree(NestSheetSpec spec)
     {
-        var border = Math.Max(0, spec.BorderMm);
-        var innerW = spec.WidthMm - border * 2;
-        var innerH = spec.LengthMm - border * 2;
-        var free = new List<Rect> { new(border, border, innerW, innerH) };
+        var (ix, iy, iw, ih) = spec.InnerRect();
+        var free = new List<Rect> { new(ix, iy, iw, ih) };
+        var inset = spec.Insets();
         foreach (var b in spec.Blocked)
         {
-            var x = Math.Max(b.MinX, border);
-            var y = Math.Max(b.MinY, border);
-            var x2 = Math.Min(b.MaxX, spec.WidthMm - border);
-            var y2 = Math.Min(b.MaxY, spec.LengthMm - border);
+            var x = Math.Max(b.MinX, inset.Left);
+            var y = Math.Max(b.MinY, inset.Bottom);
+            var x2 = Math.Min(b.MaxX, spec.WidthMm - inset.Right);
+            var y2 = Math.Min(b.MaxY, spec.LengthMm - inset.Top);
             if (x2 <= x || y2 <= y) continue;
             free = Punch(free, x, y, x2 - x, y2 - y);
         }

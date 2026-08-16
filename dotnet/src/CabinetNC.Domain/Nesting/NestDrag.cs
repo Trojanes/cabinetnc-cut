@@ -64,12 +64,22 @@ public static class NestDrag
         double oy,
         double sheetW,
         double sheetH,
-        double borderMm)
+        double borderMm) =>
+        ClampGroupOnSheet(groupW, groupH, ox, oy, sheetW, sheetH, SheetInsets.Uniform(borderMm));
+
+    public static (double Ox, double Oy) ClampGroupOnSheet(
+        double groupW,
+        double groupH,
+        double ox,
+        double oy,
+        double sheetW,
+        double sheetH,
+        SheetInsets inset)
     {
-        var minX = borderMm;
-        var minY = borderMm;
-        var maxX = Math.Max(minX, sheetW - borderMm - groupW);
-        var maxY = Math.Max(minY, sheetH - borderMm - groupH);
+        var minX = inset.Left;
+        var minY = inset.Bottom;
+        var maxX = Math.Max(minX, sheetW - inset.Right - groupW);
+        var maxY = Math.Max(minY, sheetH - inset.Top - groupH);
         return (Clamp(ox, minX, maxX), Clamp(oy, minY, maxY));
     }
 
@@ -151,13 +161,23 @@ public static class NestDrag
         double rotDeg,
         double sheetW,
         double sheetH,
-        double borderMm)
+        double borderMm) =>
+        ClampOnSheet(panel, ox, oy, rotDeg, sheetW, sheetH, SheetInsets.Uniform(borderMm));
+
+    public static (double Ox, double Oy) ClampOnSheet(
+        Panel panel,
+        double ox,
+        double oy,
+        double rotDeg,
+        double sheetW,
+        double sheetH,
+        SheetInsets inset)
     {
         var (w, h) = SizeRotated(panel, rotDeg);
-        var minX = borderMm;
-        var minY = borderMm;
-        var maxX = Math.Max(minX, sheetW - borderMm - w);
-        var maxY = Math.Max(minY, sheetH - borderMm - h);
+        var minX = inset.Left;
+        var minY = inset.Bottom;
+        var maxX = Math.Max(minX, sheetW - inset.Right - w);
+        var maxY = Math.Max(minY, sheetH - inset.Top - h);
         return (Clamp(ox, minX, maxX), Clamp(oy, minY, maxY));
     }
 
@@ -191,10 +211,31 @@ public static class NestDrag
         double borderMm,
         double safeOx,
         double safeOy,
+        IReadOnlySet<(string A, string B)>? ignorePairs = null) =>
+        SlideTo(
+            moving, grabbedId, fromOx, fromOy, toOx, toOy, sheetIndex, others, byId,
+            sheetW, sheetH, spacingMm, SheetInsets.Uniform(borderMm), safeOx, safeOy, ignorePairs);
+
+    public static (double Ox, double Oy) SlideTo(
+        IReadOnlyList<SlideMember> moving,
+        string grabbedId,
+        double fromOx,
+        double fromOy,
+        double toOx,
+        double toOy,
+        int sheetIndex,
+        IReadOnlyList<(string PanelId, int SheetIndex, double Ox, double Oy, double Rot)> others,
+        IReadOnlyDictionary<string, Panel> byId,
+        double sheetW,
+        double sheetH,
+        double spacingMm,
+        SheetInsets inset,
+        double safeOx,
+        double safeOy,
         IReadOnlySet<(string A, string B)>? ignorePairs = null)
     {
         bool Ok(double ox, double oy) =>
-            PoseFits(moving, grabbedId, ox, oy, sheetIndex, others, byId, sheetW, sheetH, spacingMm, borderMm, ignorePairs);
+            PoseFits(moving, grabbedId, ox, oy, sheetIndex, others, byId, sheetW, sheetH, spacingMm, inset, ignorePairs);
 
         if (!Ok(fromOx, fromOy))
         {
@@ -202,7 +243,7 @@ public static class NestDrag
             if (!Ok(fromOx, fromOy))
             {
                 var probed = ProbeFromBorders(
-                    Ok, moving, grabbedId, toOx, toOy, sheetW, sheetH, borderMm);
+                    Ok, moving, grabbedId, toOx, toOy, sheetW, sheetH, inset);
                 if (!probed.Found)
                     return (safeOx, safeOy);
                 fromOx = probed.Ox;
@@ -242,6 +283,23 @@ public static class NestDrag
         double sheetH,
         double spacingMm,
         double borderMm,
+        IReadOnlySet<(string A, string B)>? ignorePairs = null) =>
+        PoseFits(
+            moving, grabbedId, ox, oy, sheetIndex, others, byId, sheetW, sheetH, spacingMm,
+            SheetInsets.Uniform(borderMm), ignorePairs);
+
+    public static bool PoseFits(
+        IReadOnlyList<SlideMember> moving,
+        string grabbedId,
+        double ox,
+        double oy,
+        int sheetIndex,
+        IReadOnlyList<(string PanelId, int SheetIndex, double Ox, double Oy, double Rot)> others,
+        IReadOnlyDictionary<string, Panel> byId,
+        double sheetW,
+        double sheetH,
+        double spacingMm,
+        SheetInsets inset,
         IReadOnlySet<(string A, string B)>? ignorePairs = null)
     {
         if (moving.Count == 0) return true;
@@ -260,8 +318,8 @@ public static class NestDrag
             var mx = originX + m.RelOx;
             var my = originY + m.RelOy;
             var box = Aabb(m.Panel, mx, my, m.Rot);
-            if (box.MinX < borderMm - 0.05 || box.MinY < borderMm - 0.05
-                || box.MaxX > sheetW - borderMm + 0.05 || box.MaxY > sheetH - borderMm + 0.05)
+            if (box.MinX < inset.Left - 0.05 || box.MinY < inset.Bottom - 0.05
+                || box.MaxX > sheetW - inset.Right + 0.05 || box.MaxY > sheetH - inset.Top + 0.05)
                 return false;
             foreach (var op in others)
             {
@@ -315,14 +373,14 @@ public static class NestDrag
         double toOy,
         double sheetW,
         double sheetH,
-        double borderMm)
+        SheetInsets inset)
     {
         if (ok(toOx, toOy)) return (toOx, toOy, true);
         var grabbed = moving.FirstOrDefault(m => m.Id == grabbedId);
         if (grabbed.Id is null && moving.Count > 0) grabbed = moving[0];
         if (grabbed.Id is null) return (toOx, toOy, false);
-        var min = ClampOnSheet(grabbed.Panel, -1e9, -1e9, grabbed.Rot, sheetW, sheetH, borderMm);
-        var max = ClampOnSheet(grabbed.Panel, 1e9, 1e9, grabbed.Rot, sheetW, sheetH, borderMm);
+        var min = ClampOnSheet(grabbed.Panel, -1e9, -1e9, grabbed.Rot, sheetW, sheetH, inset);
+        var max = ClampOnSheet(grabbed.Panel, 1e9, 1e9, grabbed.Rot, sheetW, sheetH, inset);
         var tries = new[]
         {
             SearchPose(ok, min.Ox, toOy, toOx, toOy),
@@ -356,9 +414,29 @@ public static class NestDrag
         double borderMm,
         (double Ox, double Oy) fallback,
         bool allowOverlap,
+        IReadOnlySet<(string A, string B)>? ignorePairs = null) =>
+        Resolve(
+            panel, panelId, ox, oy, rotDeg, sheetIndex, others, byId, sheetW, sheetH, spacingMm,
+            SheetInsets.Uniform(borderMm), fallback, allowOverlap, ignorePairs);
+
+    public static (double Ox, double Oy, bool Blocked) Resolve(
+        Panel panel,
+        string panelId,
+        double ox,
+        double oy,
+        double rotDeg,
+        int sheetIndex,
+        IReadOnlyList<(string PanelId, int SheetIndex, double Ox, double Oy, double Rot)> others,
+        IReadOnlyDictionary<string, Panel> byId,
+        double sheetW,
+        double sheetH,
+        double spacingMm,
+        SheetInsets inset,
+        (double Ox, double Oy) fallback,
+        bool allowOverlap,
         IReadOnlySet<(string A, string B)>? ignorePairs = null)
     {
-        var clamped = ClampOnSheet(panel, ox, oy, rotDeg, sheetW, sheetH, borderMm);
+        var clamped = ClampOnSheet(panel, ox, oy, rotDeg, sheetW, sheetH, inset);
         if (allowOverlap) return (clamped.Ox, clamped.Oy, false);
 
         var box = Aabb(panel, clamped.Ox, clamped.Oy, rotDeg);

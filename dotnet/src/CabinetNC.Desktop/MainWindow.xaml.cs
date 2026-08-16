@@ -841,7 +841,10 @@ public partial class MainWindow : Window
         NestStockSummary.Text = string.Join("\n", _stockKinds.Select(k =>
             $"{k.Label}\n  {k.WidthMm:0.#}×{k.LengthMm:0.#} · 间距 {k.SpacingMm:0.#} · 边距 {k.BorderMm:0.#}" +
             (k.AllowRotate90 ? " · 可转90°" : " · 禁转") +
-            (k.AllowPartsInPart ? " · PIP" : "")));
+            (k.AllowPartsInPart ? " · PIP" : "") +
+            (k.HasLeftoverSheet
+                ? $" · leftover {k.LeftoverXMm:0.#}×{k.LeftoverYMm:0.#} @0"
+                : "")));
     }
 
     void OnModuleClick(object sender, RoutedEventArgs e)
@@ -2335,6 +2338,9 @@ public partial class MainWindow : Window
     static string CamBox(double v) =>
         v.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
 
+    static string LeftoverBox(double v) =>
+        v > 0 ? CamBox(v) : "";
+
     void ClearManufacturingState()
     {
         _nest = null;
@@ -2386,6 +2392,9 @@ public partial class MainWindow : Window
                 BorderMm = k.BorderMm,
                 AllowRotate90 = k.AllowRotate90,
                 AllowPartsInPart = k.AllowPartsInPart,
+                UseLeftoverPieces = k.UseLeftoverPieces,
+                LeftoverXMm = k.LeftoverXMm,
+                LeftoverYMm = k.LeftoverYMm,
             }).ToList(),
             Holding = _nestHolding.Select(h => new HeldPartDto
             {
@@ -2484,6 +2493,9 @@ public partial class MainWindow : Window
                 BorderMmText = CamBox(k.BorderMm),
                 AllowRotate90 = k.AllowRotate90,
                 AllowPartsInPart = k.AllowPartsInPart,
+                UseLeftoverPieces = k.UseLeftoverPieces,
+                LeftoverXMmText = LeftoverBox(k.LeftoverXMm),
+                LeftoverYMmText = LeftoverBox(k.LeftoverYMm),
             });
         }
 
@@ -2763,6 +2775,7 @@ public partial class MainWindow : Window
                 ?? (matchedSheet is { MarginMm: > 0 } ? matchedSheet.MarginMm : defaultsBorder);
             var allowRot = prior?.AllowRotate90 ?? defaultsAllowRot;
             var allowPip = prior?.AllowPartsInPart ?? true;
+            var useLeftover = prior?.UseLeftoverPieces ?? false;
 
             _stockKinds.Add(new StockMaterialKindVm
             {
@@ -2776,6 +2789,9 @@ public partial class MainWindow : Window
                 BorderMmText = border.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
                 AllowRotate90 = allowRot,
                 AllowPartsInPart = allowPip,
+                UseLeftoverPieces = useLeftover,
+                LeftoverXMmText = prior is null ? "" : LeftoverBox(prior.LeftoverXMm),
+                LeftoverYMmText = prior is null ? "" : LeftoverBox(prior.LeftoverYMm),
             });
         }
 
@@ -3528,6 +3544,24 @@ public partial class MainWindow : Window
         {
             foreach (var kind in _stockKinds)
             {
+                if (kind.HasLeftoverSheet)
+                {
+                    queue.Add(NestSheetSpec.LeftoverAtOrigin(
+                        kind.LeftoverXMm,
+                        kind.LeftoverYMm,
+                        kind.WidthMm,
+                        kind.LengthMm,
+                        kind.BorderMm,
+                        new NestSheetSpec
+                        {
+                            SpacingMm = kind.SpacingMm,
+                            AllowRotation = kind.AllowRotate90,
+                            AllowPartsInPart = kind.AllowPartsInPart,
+                            Material = kind.MaterialId,
+                            ThicknessMm = kind.ThicknessMm,
+                        }));
+                }
+
                 var matched = _session.Package?.Sheets.FirstOrDefault(s =>
                     NestGroupKey.From(s.Material, s.ThicknessMm)
                         .Equals(NestGroupKey.From(kind.MaterialId, kind.ThicknessMm)));
@@ -3565,20 +3599,6 @@ public partial class MainWindow : Window
             });
         }
 
-        foreach (var r in _library.Remnants.Where(x => x.UseInNest && x.WidthMm > 0 && x.LengthMm > 0))
-        {
-            queue.Add(new NestSheetSpec
-            {
-                WidthMm = r.WidthMm,
-                LengthMm = r.LengthMm,
-                BorderMm = Math.Min(border, 8),
-                SpacingMm = fallbackSpacing,
-                AllowRotation = fallbackAllowRot,
-                Label = r.Id,
-                Material = r.Material,
-                ThicknessMm = r.ThicknessMm,
-            });
-        }
         return queue;
     }
 
@@ -3632,7 +3652,7 @@ public partial class MainWindow : Window
     {
         var dlg = new OpenFileDialog
         {
-            Filter = "CabinetNC job|*.cnjob;*.zip;*.json;manifest.json|Manufacturing snapshot (*.cnjob)|*.cnjob|WoodJob zip (*.zip)|*.zip|JSON package (*.json)|*.json|All|*.*",
+            Filter = "OmniCam job|*.cnjob;*.zip;*.json;manifest.json|Manufacturing snapshot (*.cnjob)|*.cnjob|WoodJob zip (*.zip)|*.zip|JSON package (*.json)|*.json|All|*.*",
             Title = "Open Fusion .cnjob / manufacturing-snapshot (or woodjob / cut-package)",
         };
         if (dlg.ShowDialog() != true) return;
@@ -3664,7 +3684,7 @@ public partial class MainWindow : Window
     {
         var dlg = new OpenFileDialog
         {
-            Filter = "CabinetNC project|project.db;*.db|All|*.*",
+            Filter = "OmniCam project|project.db;*.db|All|*.*",
             Title = "打开工程",
         };
         if (dlg.ShowDialog() != true) return;
@@ -3888,7 +3908,7 @@ public partial class MainWindow : Window
                 : "project.db";
         var dlg = new SaveFileDialog
         {
-            Filter = "CabinetNC project|project.db;*.db|SQLite|*.db",
+            Filter = "OmniCam project|project.db;*.db|SQLite|*.db",
             FileName = defaultName,
             Title = "保存工程",
         };
@@ -4604,7 +4624,7 @@ public partial class MainWindow : Window
         if (!byId.TryGetValue(_nestDragPanelId, out var panel))
             return;
         var (sw, sh, _) = ActiveSheetMetrics();
-        var border = ParseMm(NestBorderBox.Text, 15);
+        var inset = ActiveSheetInsets();
         var towardBay = ScreenInHoldingBay(x);
         place.RotationDeg = _nestDragRotDeg;
         if (towardBay)
@@ -4615,7 +4635,7 @@ public partial class MainWindow : Window
         else
         {
             var (cx, cy) = NestDrag.ClampOnSheet(
-                panel, ox, oy, place.RotationDeg, sw, sh, border);
+                panel, ox, oy, place.RotationDeg, sw, sh, inset);
             ox = cx;
             oy = cy;
             (ox, oy) = ClampPipChild(_nestDragPanelId, panel, ox, oy, place.RotationDeg);
@@ -4630,10 +4650,10 @@ public partial class MainWindow : Window
                     .Where(p => !movingIds.Contains(p.PanelId))
                     .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
                     .ToList();
-                (ox, oy) = NestDrag.SlideTo(
+                    (ox, oy) = NestDrag.SlideTo(
                     members, _nestDragPanelId,
                     place.OffsetX, place.OffsetY, ox, oy,
-                    _activeNestSheet, others, byId, sw, sh, spacing, border,
+                    _activeNestSheet, others, byId, sw, sh, spacing, inset,
                     _nestOrigOx, _nestOrigOy,
                     PipIgnorePairs());
                 (ox, oy) = ClampPipChild(_nestDragPanelId, panel, ox, oy, place.RotationDeg);
@@ -4656,7 +4676,7 @@ public partial class MainWindow : Window
                 var ny = orig.Oy + dy;
                 if (!towardBay && !hard)
                     (nx, ny) = NestDrag.ClampOnSheet(
-                        otherPanel, nx, ny, other.RotationDeg, sw, sh, border);
+                        otherPanel, nx, ny, other.RotationDeg, sw, sh, inset);
                 other.OffsetX = nx;
                 other.OffsetY = ny;
             }
@@ -4702,9 +4722,9 @@ public partial class MainWindow : Window
         if (packing.Count == 0) return;
 
         var (sw, sh, _) = ActiveSheetMetrics();
-        var border = ActiveSheetBorderMm();
+        var inset = ActiveSheetInsets();
         var spacing = ActiveSheetSpacingMm();
-        var maxW = Math.Max(1, sw - border * 2);
+        var maxW = Math.Max(1, sw - inset.Left - inset.Right);
         var (groupW, groupH, packed) = NestDrag.PackHoldCluster(packing, spacing, maxW);
 
         var (mx, my) = ScreenToSheet(x, y);
@@ -4719,7 +4739,7 @@ public partial class MainWindow : Window
         var rawOx = NestDrag.SnapMm(mx - groupW * 0.5, 1);
         var rawOy = NestDrag.SnapMm(my - groupH * 0.5, 1);
         var (groupOx, groupOy) = NestDrag.ClampGroupOnSheet(
-            groupW, groupH, rawOx, rawOy, sw, sh, border);
+            groupW, groupH, rawOx, rawOy, sw, sh, inset);
 
         var allowOverlap = AllowOverlapChk.IsChecked == true;
         var others = _nest.Placements
@@ -4727,7 +4747,7 @@ public partial class MainWindow : Window
             .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
             .ToList();
         var blocked = !materialOk;
-        if (groupW > sw - border * 2 + 1e-6 || groupH > sh - border * 2 + 1e-6)
+        if (groupW > sw - inset.Left - inset.Right + 1e-6 || groupH > sh - inset.Bottom - inset.Top + 1e-6)
             blocked = true;
 
         var grabPacked = packed.FirstOrDefault(p => p.Id == _nestDragPanelId);
@@ -4756,10 +4776,10 @@ public partial class MainWindow : Window
             var safeOy = _holdSlideHasValid ? _holdSlideOy : desiredOy;
             var (sx, sy) = NestDrag.SlideTo(
                 members, grabPacked.Id, fromOx, fromOy, desiredOx, desiredOy,
-                _activeNestSheet, others, byId, sw, sh, spacing, border, safeOx, safeOy);
+                _activeNestSheet, others, byId, sw, sh, spacing, inset, safeOx, safeOy);
             if (NestDrag.PoseFits(
                     members, grabPacked.Id, sx, sy, _activeNestSheet, others, byId,
-                    sw, sh, spacing, border))
+                    sw, sh, spacing, inset))
             {
                 groupOx = sx - grabPacked.LocalOx;
                 groupOy = sy - grabPacked.LocalOy;
@@ -4783,7 +4803,7 @@ public partial class MainWindow : Window
             if (!byId.TryGetValue(part.Id, out var panel)) continue;
             var (_, _, hit) = NestDrag.Resolve(
                 panel, part.Id, ox, oy, part.Rot, _activeNestSheet,
-                others, byId, sw, sh, spacing, border,
+                others, byId, sw, sh, spacing, inset,
                 (ox, oy), allowOverlap: false);
             if (hit) blocked = true;
         }
@@ -5367,7 +5387,7 @@ public partial class MainWindow : Window
         var groupIds = _nestGroupOrig.Keys.ToHashSet(StringComparer.Ordinal);
         var (sw, sh, _) = ActiveSheetMetrics();
         var spacing = ParseMm(NestSpacingBox.Text, 12);
-        var border = ParseMm(NestBorderBox.Text, 15);
+        var inset = ActiveSheetInsets();
         var allow = AllowOverlapChk.IsChecked == true;
         var others = _nest.Placements
             .Where(p => !groupIds.Contains(p.PanelId))
@@ -5382,7 +5402,7 @@ public partial class MainWindow : Window
             var orig = _nestGroupOrig[id];
             var (_, _, blocked) = NestDrag.Resolve(
                 panel, id, place.OffsetX, place.OffsetY, place.RotationDeg, place.SheetIndex,
-                others, byId, sw, sh, spacing, border,
+                others, byId, sw, sh, spacing, inset,
                 (orig.Ox, orig.Oy), allow, PipIgnorePairs());
             if (blocked)
             {
@@ -5516,6 +5536,13 @@ public partial class MainWindow : Window
         if (_activeNestSheet >= 0 && _activeNestSheet < _nestSheetsUsed.Count)
             return Math.Max(0, _nestSheetsUsed[_activeNestSheet].BorderMm);
         return ParseMm(NestBorderBox.Text, 15);
+    }
+
+    SheetInsets ActiveSheetInsets()
+    {
+        if (_activeNestSheet >= 0 && _activeNestSheet < _nestSheetsUsed.Count)
+            return _nestSheetsUsed[_activeNestSheet].Insets();
+        return SheetInsets.Uniform(ParseMm(NestBorderBox.Text, 15));
     }
 
     double ActiveSheetSpacingMm()

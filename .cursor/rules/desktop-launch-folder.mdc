@@ -1,0 +1,14 @@
+---
+description: There is one runnable OmniCam — the folder the desktop shortcut opens
+alwaysApply: true
+---
+
+# One runnable app
+
+The only user-facing build is:
+
+`E:\Work\cabinetnc-cut\dist\CabinetNC-Cut\CabinetNC.Desktop.exe`
+
+Desktop icon `OmniCam` and `OmniCam.cmd` start that folder.
+
+Do not create extra copies (`dist\CabinetNC-Cut-fd*`, `*-stage4`, `*-next`, `*-old`, `*-win-x64`). After Desktop/Domain changes, `dotnet build -c Release` the Desktop project; PostBuild copies into `dist\CabinetNC-Cut`. If copy fails, the app is open — close it and rebuild. Tell the user to reopen from the desktop icon.

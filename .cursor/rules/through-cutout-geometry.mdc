@@ -1,0 +1,35 @@
+---
+description: Never invent through-cutout rounding from size alone (lock slots)
+globs: **/LockSlotGeometry.cs,**/GrooveGeometry.cs,**/ManufacturingSnapshotImporter.cs,**/ManufacturingSnapshot*.cs,**/*Importer*Tests.cs
+alwaysApply: false
+---
+
+# Through-cutout / lock-slot geometry
+
+## Hard rule
+
+**Do not round, stadium-rebuild, or otherwise reshape a through cutout based only on AABB size** (e.g. “looks like 55×15.5”).
+
+A genuine sharp rectangular through hole of any size — including 55×15.5 — must stay sharp.
+
+## Allowed stadium rebuild signals (opt-in only)
+
+Upgrade a collapsed sharp quad → stadium **only** when at least one is true:
+
+1. Explicit lock intent (`purpose` / `operationType` / hardware tag contains `lock`)
+2. Snapshot `hasArc: true` (Fusion extract saw Arc3D/Circle3D on the opening)
+
+If neither is present → **pass CAD / profile points through unchanged**.
+
+## Prefer preserving CAD
+
+- If `profile.points` is already a tessellated stadium (does not simplify to a 4-corner quad), keep it.
+- Do not add heuristics that “guess” R8 / lock hardware from dimensions.
+
+## Regression coverage
+
+Keep tests that assert:
+
+- Untagged sharp 55×15.5 through → stays 4 corners
+- `hasArc` or lock-tagged sharp quad → stadium
+---

@@ -32,12 +32,11 @@ public static class ContourToolOffset
                 .FirstOrDefault();
             if (best is null || best.Count < 3) return op;
 
-            return op with
-            {
-                Path = best
-                    .Select(p => (p.X / Scale, p.Y / Scale))
-                    .ToList(),
-            };
+            var pts = best
+                .Select(p => (p.X / Scale, p.Y / Scale))
+                .ToList();
+            pts = ClimbCut.OrientClosed(pts, inner: op.FeatureId is not null).ToList();
+            return op with { Path = pts };
         }).ToList();
     }
 }

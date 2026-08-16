@@ -58,25 +58,39 @@ public static class PolylineArcFit
         cw = false;
         r = 0;
         if (i + 2 >= pts.Count) return false;
-        if (!CircleThrough(pts[i], pts[i + 1], pts[i + 2], out var cx, out var cy, out r, out cw))
-            return false;
-        if (r < MinRadiusMm || r > MaxRadiusMm) return false;
 
-        end = i + 2;
-        while (end + 1 < pts.Count)
+        var bestEnd = -1;
+        double bestR = 0, bestCx = 0, bestCy = 0;
+        var bestCw = false;
+
+        for (var j = i + 2; j < pts.Count; j++)
         {
-            var next = pts[end + 1];
-            if (!OnCircle(next, cx, cy, r)) break;
-            var turn = Cross(pts[end - 1], pts[end], next);
-            if (cw ? turn > 1e-9 : turn < -1e-9) break;
-            var sweep = SweepDeg(pts[i], next, cx, cy, cw);
-            if (sweep > 180.5) break;
-            if (!ShortChord(pts[end], next, r)) break;
-            end++;
+            var mid = (i + j) / 2;
+            if (mid <= i) mid = i + 1;
+            if (mid >= j) mid = j - 1;
+            if (!CircleThrough(pts[i], pts[mid], pts[j], out var cx, out var cy, out var rr, out var ccw)
+                && !CircleThrough(pts[i], pts[i + 1], pts[j], out cx, out cy, out rr, out ccw))
+            {
+                if (bestEnd >= 0) break;
+                continue;
+            }
+            if (!AcceptArc(pts, i, j, cx, cy, rr, ccw))
+            {
+                if (bestEnd >= 0) break;
+                continue;
+            }
+            bestEnd = j;
+            bestR = rr;
+            bestCw = ccw;
+            bestCx = cx;
+            bestCy = cy;
         }
 
-        if (end < i + 2) return false;
-        if (!AllShort(pts, i, end, r)) return false;
+        if (bestEnd < i + 2) return false;
+        end = bestEnd;
+        r = bestR;
+        cw = bestCw;
+
         if (end == i + 2)
         {
             var l0 = Dist(pts[i], pts[i + 1]);
@@ -86,10 +100,43 @@ public static class PolylineArcFit
             if (Math.Max(l0, l1) / lo > 1.8) return false;
         }
 
-        var sweepDeg = SweepDeg(pts[i], pts[end], cx, cy, cw);
+        var sweepDeg = SweepDeg(pts[i], pts[end], bestCx, bestCy, cw);
         var sagitta = r * (1 - Math.Cos(sweepDeg * Math.PI / 360));
         if (sweepDeg < MinSweepDeg && sagitta < MinSagittaMm) return false;
         if (sagitta < MinSagittaMm && end < i + 3) return false;
+        return true;
+    }
+
+    static bool AcceptArc(
+        IReadOnlyList<(double X, double Y)> pts,
+        int i,
+        int j,
+        double cx, double cy, double r, bool cw)
+    {
+        if (r < MinRadiusMm || r > MaxRadiusMm) return false;
+        var sweep = SweepDeg(pts[i], pts[j], cx, cy, cw);
+        if (sweep > 180.5) return false;
+        if (!AllOnCircle(pts, i, j, cx, cy, r)) return false;
+        if (!SameTurn(pts, i, j, cw)) return false;
+        if (!AllShort(pts, i, j, r)) return false;
+        return true;
+    }
+
+    static bool AllOnCircle(
+        IReadOnlyList<(double X, double Y)> pts, int i, int j, double cx, double cy, double r)
+    {
+        for (var k = i; k <= j; k++)
+            if (!OnCircle(pts[k], cx, cy, r)) return false;
+        return true;
+    }
+
+    static bool SameTurn(IReadOnlyList<(double X, double Y)> pts, int i, int j, bool cw)
+    {
+        for (var k = i + 1; k < j; k++)
+        {
+            var turn = Cross(pts[k - 1], pts[k], pts[k + 1]);
+            if (cw ? turn > 1e-9 : turn < -1e-9) return false;
+        }
         return true;
     }
 
@@ -147,7 +194,7 @@ public static class PolylineArcFit
     static double SnapRadius(double r)
     {
         foreach (var s in SnapRadii)
-            if (Math.Abs(r - s) <= 0.02) return s;
+            if (Math.Abs(r - s) <= 0.05) return s;
         return Math.Round(r, 4, MidpointRounding.AwayFromZero);
     }
 

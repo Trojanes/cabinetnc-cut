@@ -29,7 +29,7 @@ public static class JobSheetBuilder
         sb.AppendLine("<style>body{font:13px/1.4 system-ui,sans-serif;margin:24px}table{border-collapse:collapse;width:100%;max-width:720px}");
         sb.AppendLine("th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}th{background:#f4f4f4}@media print{button{display:none}}</style></head><body>");
         sb.AppendLine("<button onclick=\"print()\">打印</button>");
-        sb.AppendLine($"<h1>CabinetNC Cut · {Esc(name)}</h1>");
+        sb.AppendLine($"<h1>OmniCam · {Esc(name)}</h1>");
         sb.AppendLine("<div style=\"color:#444;margin-bottom:16px;white-space:pre-wrap\">");
         sb.AppendLine($"格式: {Esc(pkg.SchemaName)} v{pkg.Version}");
         sb.AppendLine($"机型: {Esc(profile.Name)} · Ø{profile.ToolDiameterMm}");

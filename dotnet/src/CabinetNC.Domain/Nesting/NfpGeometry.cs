@@ -60,20 +60,24 @@ public static class NfpGeometry
         return false;
     }
 
-    public static IEnumerable<(double X, double Y)> CandidateReferences(Paths64 nfps, double borderMm, int max)
+    public static IEnumerable<(double X, double Y)> CandidateReferences(Paths64 nfps, double borderMm, int max) =>
+        CandidateReferences(nfps, borderMm, borderMm, max);
+
+    public static IEnumerable<(double X, double Y)> CandidateReferences(
+        Paths64 nfps, double minX, double minY, int max)
     {
         var seen = new HashSet<(long, long)>();
         var list = new List<(double X, double Y)>(max);
         void Add(double x, double y)
         {
             if (list.Count >= max) return;
-            if (x < borderMm - 1e-6 || y < borderMm - 1e-6) return;
+            if (x < minX - 1e-6 || y < minY - 1e-6) return;
             var key = ((long)Math.Round(x * 100), (long)Math.Round(y * 100));
             if (!seen.Add(key)) return;
             list.Add((x, y));
         }
 
-        Add(borderMm, borderMm);
+        Add(minX, minY);
         foreach (var nfp in nfps)
         {
             if (nfp.Count < 2) continue;

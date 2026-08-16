@@ -315,19 +315,19 @@ public sealed class DeepnestPreviewNestingEngine : INestingEngine
         SheetState sheet,
         double clearance)
     {
-        var border = Math.Max(0, sheet.Spec.BorderMm);
+        var inset = sheet.Spec.Insets();
         var points = new Dictionary<(long X, long Y), (double X, double Y)>();
         void Add(double x, double y)
         {
             if (points.Count >= MaxCandidates * 4) return;
-            if (x < border - 1e-7 || y < border - 1e-7) return;
+            if (x < inset.Left - 1e-7 || y < inset.Bottom - 1e-7) return;
             var key = ((long)Math.Round(x * 100), (long)Math.Round(y * 100));
             points.TryAdd(key, (x, y));
         }
 
-        Add(border, border);
-        var xs = new HashSet<double> { border };
-        var ys = new HashSet<double> { border };
+        Add(inset.Left, inset.Bottom);
+        var xs = new HashSet<double> { inset.Left };
+        var ys = new HashSet<double> { inset.Bottom };
         // AABB edges are cheap — keep all. Vertex-pair seeds are expensive — only last few shapes.
         foreach (var fixedShape in sheet.Placed)
         {
@@ -372,10 +372,7 @@ public sealed class DeepnestPreviewNestingEngine : INestingEngine
 
     static bool FitsSheet(Path64 path, Bounds bounds, SheetState sheet, double clearance)
     {
-        var border = Math.Max(0, sheet.Spec.BorderMm);
-        if (bounds.MinX < border - 1e-6 || bounds.MinY < border - 1e-6
-            || bounds.MaxX > sheet.Spec.WidthMm - border + 1e-6
-            || bounds.MaxY > sheet.Spec.LengthMm - border + 1e-6)
+        if (!sheet.Spec.ContainsBox(bounds.MinX, bounds.MinY, bounds.MaxX, bounds.MaxY, 1e-6))
             return false;
 
         foreach (var blocked in sheet.Spec.Blocked)
@@ -476,6 +473,10 @@ public sealed class DeepnestPreviewNestingEngine : INestingEngine
             WidthMm = src.WidthMm,
             LengthMm = src.LengthMm,
             BorderMm = src.BorderMm,
+            InsetLeftMm = src.InsetLeftMm,
+            InsetBottomMm = src.InsetBottomMm,
+            InsetRightMm = src.InsetRightMm,
+            InsetTopMm = src.InsetTopMm,
             SpacingMm = src.SpacingMm,
             AllowRotation = src.AllowRotation,
             AllowPartsInPart = src.AllowPartsInPart,

@@ -222,8 +222,16 @@ public static partial class NcEmitter
         var run = new List<(double X, double Y)>();
         void FlushCut()
         {
-            if (run.Count >= 2)
-                EmitFittedXy(w, run, feed, closed: false);
+            if (run.Count < 2)
+            {
+                run.Clear();
+                return;
+            }
+            var loop = run.Count >= 4
+                && Math.Sqrt(
+                    (run[0].X - run[^1].X) * (run[0].X - run[^1].X)
+                    + (run[0].Y - run[^1].Y) * (run[0].Y - run[^1].Y)) < 0.05;
+            EmitFittedXy(w, run, feed, closed: loop);
             run.Clear();
         }
 

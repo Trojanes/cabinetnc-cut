@@ -66,7 +66,7 @@ public static class PocketClearer
         }
 
         var region = Largest(insetPaths);
-        EnsureCcw(region);
+        EnsureCcw(region); // inner wall climb with M3 = CCW
 
         var rings = OffsetRings(region, step);
         var spiral = StitchSpiralInsideOut(rings);

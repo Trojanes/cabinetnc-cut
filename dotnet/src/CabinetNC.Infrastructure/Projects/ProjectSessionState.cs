@@ -74,6 +74,10 @@ public sealed class NestSheetDto
     public double WidthMm { get; set; }
     public double LengthMm { get; set; }
     public double BorderMm { get; set; }
+    public double? InsetLeftMm { get; set; }
+    public double? InsetBottomMm { get; set; }
+    public double? InsetRightMm { get; set; }
+    public double? InsetTopMm { get; set; }
     public double SpacingMm { get; set; }
     public bool AllowRotation { get; set; } = true;
     public bool AllowPartsInPart { get; set; }
@@ -93,6 +97,9 @@ public sealed class StockKindDto
     public double BorderMm { get; set; }
     public bool AllowRotate90 { get; set; } = true;
     public bool AllowPartsInPart { get; set; } = true;
+    public bool UseLeftoverPieces { get; set; }
+    public double LeftoverXMm { get; set; }
+    public double LeftoverYMm { get; set; }
 }
 
 public sealed class HeldPartDto
@@ -312,6 +319,10 @@ public static class ProjectSessionCodec
         WidthMm = s.WidthMm,
         LengthMm = s.LengthMm,
         BorderMm = s.BorderMm,
+        InsetLeftMm = s.InsetLeftMm,
+        InsetBottomMm = s.InsetBottomMm,
+        InsetRightMm = s.InsetRightMm,
+        InsetTopMm = s.InsetTopMm,
         SpacingMm = s.SpacingMm,
         AllowRotation = s.AllowRotation,
         AllowPartsInPart = s.AllowPartsInPart,
@@ -325,6 +336,10 @@ public static class ProjectSessionCodec
         WidthMm = d.WidthMm,
         LengthMm = d.LengthMm,
         BorderMm = d.BorderMm,
+        InsetLeftMm = d.InsetLeftMm,
+        InsetBottomMm = d.InsetBottomMm,
+        InsetRightMm = d.InsetRightMm,
+        InsetTopMm = d.InsetTopMm,
         SpacingMm = d.SpacingMm,
         AllowRotation = d.AllowRotation,
         AllowPartsInPart = d.AllowPartsInPart,

@@ -208,7 +208,7 @@ public sealed class ClipperNfpNestingEngine : INestingEngine
             ct.ThrowIfCancellationRequested();
             var local = LocalNormalized(panel, rot);
             if (local.Points.Count < 3) continue;
-            if (!FitsAabb(local.Bounds, sheet.Spec, sheet.Spec.BorderMm))
+            if (!sheet.Spec.FitsLocalSize(local.Bounds.MaxX, local.Bounds.MaxY))
                 continue;
 
             var movingPath = NfpGeometry.ToPath(local.Points);
@@ -228,7 +228,7 @@ public sealed class ClipperNfpNestingEngine : INestingEngine
                     nfps.Add(path);
             }
 
-            var border = Math.Max(0, sheet.Spec.BorderMm);
+            var inset = sheet.Spec.Insets();
             var w = local.Bounds.MaxX;
             var h = local.Bounds.MaxY;
             var candidates = new List<(double X, double Y)>();
@@ -238,7 +238,7 @@ public sealed class ClipperNfpNestingEngine : INestingEngine
                 if (w <= fr.W + 1e-6 && h <= fr.H + 1e-6)
                     candidates.Add((fr.X, fr.Y));
             }
-            candidates.AddRange(NfpGeometry.CandidateReferences(nfps, border, MaxCandidates / 2));
+            candidates.AddRange(NfpGeometry.CandidateReferences(nfps, inset.Left, inset.Bottom, MaxCandidates / 2));
             foreach (var placed in sheet.Placed)
             {
                 candidates.Add((placed.Bounds.MaxX + clearance, placed.Bounds.MinY));
@@ -314,21 +314,8 @@ public sealed class ClipperNfpNestingEngine : INestingEngine
         !(a.MaxX + gap <= b.MinX || b.MaxX + gap <= a.MinX
           || a.MaxY + gap <= b.MinY || b.MaxY + gap <= a.MinY);
 
-    static bool FitsInSheet(Bounds local, double x, double y, NestSheetSpec sheet)
-    {
-        var border = Math.Max(0, sheet.BorderMm);
-        return x >= border - 1e-6
-               && y >= border - 1e-6
-               && x + local.MaxX <= sheet.WidthMm - border + 1e-6
-               && y + local.MaxY <= sheet.LengthMm - border + 1e-6;
-    }
-
-    static bool FitsAabb(Bounds local, NestSheetSpec sheet, double border)
-    {
-        var innerW = sheet.WidthMm - 2 * border;
-        var innerH = sheet.LengthMm - 2 * border;
-        return local.MaxX <= innerW + 1e-6 && local.MaxY <= innerH + 1e-6;
-    }
+    static bool FitsInSheet(Bounds local, double x, double y, NestSheetSpec sheet) =>
+        sheet.ContainsBox(x + local.MinX, y + local.MinY, x + local.MaxX, y + local.MaxY, 1e-6);
 
     static LocalShape LocalNormalized(Panel panel, double rotationDeg)
     {
@@ -367,6 +354,10 @@ public sealed class ClipperNfpNestingEngine : INestingEngine
             WidthMm = src.WidthMm,
             LengthMm = src.LengthMm,
             BorderMm = src.BorderMm,
+            InsetLeftMm = src.InsetLeftMm,
+            InsetBottomMm = src.InsetBottomMm,
+            InsetRightMm = src.InsetRightMm,
+            InsetTopMm = src.InsetTopMm,
             SpacingMm = src.SpacingMm,
             AllowRotation = src.AllowRotation,
             AllowPartsInPart = src.AllowPartsInPart,
@@ -409,14 +400,10 @@ public sealed class ClipperNfpNestingEngine : INestingEngine
         public SheetState(NestSheetSpec spec)
         {
             Spec = spec;
-            var border = Math.Max(0, spec.BorderMm);
+            var (ix, iy, iw, ih) = spec.InnerRect();
             Free =
             [
-                new FreeRect(
-                    border,
-                    border,
-                    Math.Max(0, spec.WidthMm - 2 * border),
-                    Math.Max(0, spec.LengthMm - 2 * border)),
+                new FreeRect(ix, iy, iw, ih),
             ];
             foreach (var b in spec.Blocked)
                 ConsumeFree(b.MinX, b.MinY, Math.Max(0, b.MaxX - b.MinX), Math.Max(0, b.MaxY - b.MinY));
