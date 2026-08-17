@@ -3,9 +3,10 @@ namespace CabinetNC.Domain.Geometry;
 using CabinetNC.Domain.Parts;
 
 /// <summary>
-/// Groove display helpers. Machining still uses the centreline path; UI prefers
-/// the CAD opening polygon when present, else reconstructs a strip from
-/// centreline + width (with a swap guard for axis-flipped exports).
+/// Groove display helpers. Wide-slot machining uses this outline via
+/// <c>GrooveClear</c>; a tool-width tongue still follows the centreline.
+/// UI prefers the CAD opening polygon when present, else reconstructs a
+/// strip from centreline + width (with a swap guard for axis-flipped exports).
 /// </summary>
 public static class GrooveGeometry
 {

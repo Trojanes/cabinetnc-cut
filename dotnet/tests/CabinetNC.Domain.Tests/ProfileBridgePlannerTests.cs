@@ -25,6 +25,44 @@ public class ProfileBridgePlannerTests
     };
 
     [Fact]
+    public void Reproject_single_sheet_preserves_bridges_on_unrepresented_sheets()
+    {
+        var bridges = new[]
+        {
+            new ProfileBridge
+            {
+                Id = "a",
+                PairId = "b",
+                PanelId = "B",
+                SheetIndex = 1,
+                ArcLengthMm = 10,
+                X = 10,
+                Y = 0,
+                WidthMm = 5,
+            },
+            new ProfileBridge
+            {
+                Id = "b",
+                PairId = "a",
+                PanelId = "C",
+                SheetIndex = 1,
+                ArcLengthMm = 20,
+                X = 20,
+                Y = 0,
+                WidthMm = 5,
+            },
+        };
+
+        var kept = ProfileBridgePlanner.Reproject(
+            bridges,
+            [Contour("A", Rect(0, 0, 100, 50), sheet: 0)]);
+
+        Assert.Equal(2, kept.Count);
+        Assert.Equal("b", kept.Single(x => x.Id == "a").PairId);
+        Assert.Equal("a", kept.Single(x => x.Id == "b").PairId);
+    }
+
+    [Fact]
     public void Isolated_edge_places_a_single_bridge()
     {
         var path = Rect(0, 0, 100, 50);

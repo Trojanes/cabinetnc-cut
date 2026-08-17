@@ -19,6 +19,16 @@ public static class PocketClearer
         public double ToolDiameterMm { get; init; } = 6.35;
         public double? StepoverMm { get; init; }
         public double OnionSkinMm { get; init; } = DefaultOnionSkinMm;
+        /// <summary>
+        /// Emit a separate wall loop after the spiral. Disable when the spiral's
+        /// outermost ring already cuts the feature directly to its final size.
+        /// </summary>
+        public bool EmitFinishLoop { get; init; } = true;
+        /// <summary>
+        /// Close every clearance ring before stepping outward. Used by hinge
+        /// cups so each displayed/machined ring is a complete circle.
+        /// </summary>
+        public bool CloseClearRings { get; init; }
     }
 
     public sealed class PocketClearResult
@@ -69,8 +79,9 @@ public static class PocketClearer
         EnsureCcw(region); // inner wall climb with M3 = CCW
 
         var rings = OffsetRings(region, step);
-        var spiral = StitchSpiralInsideOut(rings);
-        IReadOnlyList<(double X, double Y)>? finish = ClosedLoop(region);
+        var spiral = StitchSpiralInsideOut(rings, req.CloseClearRings);
+        IReadOnlyList<(double X, double Y)>? finish =
+            req.EmitFinishLoop ? ClosedLoop(region, spiral.Count > 0 ? spiral[^1] : null) : null;
 
         var flat = new List<(double X, double Y)>();
         if (spiral.Count >= 2)
@@ -112,7 +123,9 @@ public static class PocketClearer
         return rings;
     }
 
-    static List<(double X, double Y)> StitchSpiralInsideOut(IReadOnlyList<Path64> outerToInner)
+    static List<(double X, double Y)> StitchSpiralInsideOut(
+        IReadOnlyList<Path64> outerToInner,
+        bool closeEachRing)
     {
         var spiral = new List<(double X, double Y)>();
         if (outerToInner.Count == 0) return spiral;
@@ -128,7 +141,9 @@ public static class PocketClearer
                 spiral.Add(pts[0]);
             for (var i = 0; i < pts.Count; i++)
                 spiral.Add(pts[i]);
-            last = pts[^1];
+            if (closeEachRing)
+                spiral.Add(pts[0]);
+            last = spiral[^1];
         }
         return spiral;
     }
@@ -157,12 +172,14 @@ public static class PocketClearer
         return pts;
     }
 
-    static IReadOnlyList<(double X, double Y)> ClosedLoop(Path64 region)
+    static IReadOnlyList<(double X, double Y)> ClosedLoop(
+        Path64 region,
+        (double X, double Y)? startNear = null)
     {
-        var loop = new List<(double X, double Y)>(region.Count + 1);
-        foreach (var p in region)
-            loop.Add((p.X / Scale, p.Y / Scale));
-        loop.Add((region[0].X / Scale, region[0].Y / Scale));
+        var loop = ToPoints(region);
+        if (startNear is { } p)
+            RotateInPlace(loop, NearestIndex(loop, p));
+        loop.Add(loop[0]);
         return loop;
     }
 

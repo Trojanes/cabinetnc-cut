@@ -55,6 +55,10 @@ public class CamStrategyTests
         var ops = OpsPlanner.FeaturesToOps([panel]);
         Assert.Contains(ops, o => o.Op == "groove" && o.FeatureId == "G1" && o.IsTongue && o.ToolId == "T1");
         Assert.Contains(ops, o => o.Op == "groove" && o.FeatureId == "G2" && !o.IsTongue && o.ToolId == "T2");
+        var narrow = Assert.Single(ops, o => o.FeatureId == "G1");
+        Assert.True(narrow.PathSegments is null or { Count: 0 });
+        var wide = Assert.Single(ops, o => o.FeatureId == "G2");
+        Assert.True(wide.FinishLoop is { Count: >= 3 } || wide.PathSegments is { Count: > 0 });
         Assert.Contains(ops, o => o.Op == "contour" && o.ToolId == "T2");
     }
 

@@ -1,5 +1,6 @@
 namespace CabinetNC.Domain.Nesting;
 
+using CabinetNC.Domain.Manufacturing;
 using CabinetNC.Domain.Parts;
 
 /// <summary>
@@ -11,6 +12,8 @@ public static class GuillotineCutPlanner
 {
     public const double DefaultClearanceMm = 20;
     public const double MinRemnantEdgeMm = 400;
+    public const string OpKind = "remnant";
+    public const string FeatureId = "guillotine";
 
     public sealed class Result
     {
@@ -79,6 +82,61 @@ public static class GuillotineCutPlanner
             .OrderByDescending(c => c.RemnantAreaMm2)
             .ThenBy(c => c.Kind == "L" ? 1 : 0)
             .First();
+    }
+
+    /// <summary>
+    /// Sheet-space through-cut on the preview polyline. Endpoints overshoot the
+    /// sheet by half the tool so the kerf severs the edge.
+    /// </summary>
+    public static CutOp? ToCutOp(
+        Result plan,
+        int sheetIndex,
+        double sheetW,
+        double sheetH,
+        double thicknessMm,
+        double toolDiameterMm = 10)
+    {
+        if (plan.Polyline.Count < 2) return null;
+        _ = sheetW;
+        _ = sheetH;
+        var overshoot = Math.Max(0, toolDiameterMm) * 0.5;
+        var path = Overshoot(plan.Polyline, overshoot);
+        var th = thicknessMm > 0 ? thicknessMm : 18;
+        return new CutOp
+        {
+            Op = OpKind,
+            PanelId = $"SHEET-{sheetIndex}-REMNANT",
+            FeatureId = FeatureId,
+            Placed = true,
+            Enabled = true,
+            SheetIndex = sheetIndex,
+            Path = path,
+            ClosePath = false,
+            Through = true,
+            ToolId = "T2",
+            ThicknessMm = th,
+            DepthMm = CamSafety.OuterContourDepthMm(th),
+        };
+    }
+
+    static IReadOnlyList<(double X, double Y)> Overshoot(
+        IReadOnlyList<(double X, double Y)> poly,
+        double extraMm)
+    {
+        if (poly.Count < 2 || extraMm < 1e-9) return poly.ToList();
+        var list = poly.ToList();
+        list[0] = Extend(list[1], list[0], extraMm);
+        list[^1] = Extend(list[^2], list[^1], extraMm);
+        return list;
+    }
+
+    static (double X, double Y) Extend((double X, double Y) from, (double X, double Y) toward, double extra)
+    {
+        var dx = toward.X - from.X;
+        var dy = toward.Y - from.Y;
+        var len = Math.Sqrt(dx * dx + dy * dy);
+        if (len < 1e-9) return toward;
+        return (toward.X + dx / len * extra, toward.Y + dy / len * extra);
     }
 
     static void TryVertical(

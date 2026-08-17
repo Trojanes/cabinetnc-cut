@@ -668,6 +668,23 @@
                                      HorizontalAlignment="Center" />
                         </StackPanel>
                       </ToggleButton>
+                      <ToggleButton x:Name="OpsIconGuillotine" Style="{StaticResource OpsIconBtn}"
+                                    Tag="Guillotine" Click="OnOpsToolpathIconClick"
+                                    Visibility="Collapsed"
+                                    ToolTip="Guillotine cut · 界面二的余料分割线">
+                        <StackPanel HorizontalAlignment="Center">
+                          <Canvas Width="34" Height="22" HorizontalAlignment="Center" Margin="0,0,0,4">
+                            <Line X1="6" Y1="4" X2="6" Y2="18" Stroke="#C45A00" StrokeThickness="2"
+                                  StrokeDashArray="2 1.5" />
+                            <Line X1="6" Y1="18" X2="28" Y2="18" Stroke="#C45A00" StrokeThickness="2"
+                                  StrokeDashArray="2 1.5" />
+                          </Canvas>
+                          <TextBlock Text="Guillotine" FontSize="9" HorizontalAlignment="Center"
+                                     TextAlignment="Center" TextWrapping="Wrap" />
+                          <TextBlock x:Name="OpsIconGuillotineCount" Text="" FontSize="9" Opacity="0.75"
+                                     HorizontalAlignment="Center" />
+                        </StackPanel>
+                      </ToggleButton>
                     </StackPanel>
                     <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom">
                       <CheckBox x:Name="OpsHomeXyChk" IsChecked="True" FontSize="10"
@@ -793,6 +810,24 @@
                         <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#666" Margin="0,0,0,8"
                                    Text="不选手动刀号，孔径跟钻头走。孔间 G0。盲孔深度跟 CAD。大于阈值的孔（含铰杯）走 Area Clearance。" />
                         <TextBlock x:Name="DrillSummary" Text="" FontSize="10" Foreground="#666" TextWrapping="Wrap" />
+                      </StackPanel>
+                      <StackPanel x:Name="OpsParamsGuillotine" Visibility="Collapsed">
+                        <Border BorderBrush="#C45A00" BorderThickness="1" Padding="8" Background="#FFF8F0">
+                          <StackPanel>
+                            <TextBlock Text="Guillotine cut" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="#8A3E00" Margin="0,0,0,8" />
+                            <TextBlock Text="Feedrate (mm/min)" FontSize="10" Foreground="#666" />
+                            <TextBox x:Name="GuillotineFeed" Text="9000" Margin="0,0,0,6"
+                                     LostFocus="OnGuillotineFieldChanged" />
+                            <TextBlock Text="Plunge rate (mm/min)" FontSize="10" Foreground="#666" />
+                            <TextBox x:Name="GuillotinePlunge" Text="1000" Margin="0,0,0,6"
+                                     LostFocus="OnGuillotineFieldChanged" />
+                            <TextBlock Text="探底深度 (mm)" FontSize="10" Foreground="#666" />
+                            <TextBox x:Name="GuillotineThrough" Text="-0.55" Margin="0,0,0,0"
+                                     LostFocus="OnGuillotineFieldChanged"
+                                     ToolTip="余料分割线贯通下探。默认 -0.55。" />
+                          </StackPanel>
+                        </Border>
                       </StackPanel>
 
                       <StackPanel Visibility="Collapsed">

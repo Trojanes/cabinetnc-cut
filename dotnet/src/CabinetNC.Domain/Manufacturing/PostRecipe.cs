@@ -22,6 +22,7 @@ public sealed class PostRecipe
     public double ProfileFirstPlunge { get; init; } = TroyRecipe.PlungeFeedMmMin;
     public bool ProfileFirstRamp45 { get; init; }
     public double ProfileFirstLeaveMm { get; init; } = TroyRecipe.LastPassLeaveMm;
+    public double ProfileBridgeLeaveMm { get; init; } = TroyRecipe.BridgeLeaveMm;
 
     public double ProfileLastFeed { get; init; } = TroyRecipe.WorkLastFeedMmMin;
     public double ProfileLastRpm { get; init; } = TroyRecipe.SpindleRpm;
@@ -31,6 +32,10 @@ public sealed class PostRecipe
     public double DrillPlunge { get; init; } = TroyRecipe.PlungeFeedMmMin;
     public double DrillRpm { get; init; } = TroyRecipe.SpindleRpm;
     public double DrillThroughZMm { get; init; } = TroyRecipe.ThroughZMm;
+
+    public double GuillotineFeed { get; init; } = TroyRecipe.GuillotineFeedMmMin;
+    public double GuillotinePlunge { get; init; } = TroyRecipe.GuillotinePlungeMmMin;
+    public double GuillotineThroughZMm { get; init; } = TroyRecipe.GuillotineThroughZMm;
 
     /// <summary>After the last retract, emit <c>G0 X0 Y0</c> before G80. Default on.</summary>
     public bool HomeXyAtEnd { get; init; } = true;

@@ -110,20 +110,45 @@ public static class OpsPlanner
                          && f.Path is { Count: >= 2 } path)
                 {
                     var isTongue = Parts.PanelEdit.IsTongueGroove(f);
+                    var width = GrooveClear.ResolveWidthMm(f);
+                    var toolId = isTongue
+                        ? TroyRecipe.TongueToolId
+                        : ClearanceToolPick.Pick(f, clearanceLargeMinShortMm);
+                    var toolDia = ClearanceToolPick.DiameterOf(toolId);
+                    IReadOnlyList<(double X, double Y)> groovePath =
+                        path.Select(p => (p.X, p.Y)).ToList();
+                    IReadOnlyList<IReadOnlyList<(double X, double Y)>>? segments = null;
+                    IReadOnlyList<(double X, double Y)>? finish = null;
+                    var tooSmall = false;
+                    var cleared = GrooveClear.TryClear(f, toolDia);
+                    if (cleared is not null)
+                    {
+                        if (cleared.TooSmallForTool)
+                            tooSmall = true;
+                        else
+                        {
+                            segments = cleared.Segments;
+                            finish = cleared.FinishLoop;
+                            if (cleared.Path.Count >= 2)
+                                groovePath = cleared.Path;
+                        }
+                    }
                     ops.Add(new CutOp
                     {
                         Op = "groove",
                         PanelId = panel.PanelId,
                         FeatureId = f.FeatureId,
                         DepthMm = f.DepthMm,
-                        WidthMm = f.WidthMm,
-                        Path = path.Select(p => (p.X, p.Y)).ToList(),
+                        WidthMm = width > 1e-9 ? width : f.WidthMm,
+                        Path = groovePath,
+                        PathSegments = segments,
+                        FinishLoop = finish,
+                        ClosePath = false,
+                        PocketTooSmallForTool = tooSmall,
                         PanelBounds = bounds,
                         Side = panel.Side ?? panel.Orientation?.MillingFace,
                         IsTongue = isTongue,
-                        ToolId = isTongue
-                            ? TroyRecipe.TongueToolId
-                            : ClearanceToolPick.Pick(f, clearanceLargeMinShortMm),
+                        ToolId = toolId,
                         ThicknessMm = panel.ThicknessMm,
                         Through = f.Through,
                     });
@@ -171,10 +196,14 @@ public static class OpsPlanner
     {
         var toolId = ClearanceToolPick.Pick(f, clearanceLargeMinShortMm);
         var toolDia = ClearanceToolPick.DiameterOf(toolId);
+        var directToSize = ClearanceToolPick.IsHingeFeature(f);
         var cleared = PocketClearer.Clear(new PocketClearer.PocketClearRequest
         {
             Outline = outline,
             ToolDiameterMm = toolDia,
+            OnionSkinMm = directToSize ? 0 : PocketClearer.DefaultOnionSkinMm,
+            EmitFinishLoop = !directToSize,
+            CloseClearRings = directToSize,
         });
         ops.Add(new CutOp
         {

@@ -1,6 +1,7 @@
 namespace CabinetNC.Domain.Manufacturing;
 
 using CabinetNC.Domain.Machines;
+using CabinetNC.Domain.Nesting;
 
 public sealed record PreflightIssue(string Level, string Code, string Message);
 
@@ -34,6 +35,8 @@ public static class NcPreflight
             var oob = 0;
             foreach (var op in placed)
             {
+                if (op.Op == GuillotineCutPlanner.OpKind)
+                    continue;
                 foreach (var (x, y) in PointsOf(op))
                 {
                     if (x < -0.5 || y < -0.5 || x > sheetWidthMm + 0.5 || y > sheetLengthMm + 0.5)
@@ -59,6 +62,7 @@ public static class NcPreflight
         }
 
         issues.AddRange(PocketSafetyIssues(placed));
+        issues.AddRange(GrooveClearIssues(placed));
 
         if (panelsById is not null)
         {
@@ -108,6 +112,31 @@ public static class NcPreflight
         return issues;
     }
 
+    /// <summary>Wide groove must have a 回转 clear path — never a silent centreline.</summary>
+    public static IReadOnlyList<PreflightIssue> GrooveClearIssues(IEnumerable<CutOp> ops)
+    {
+        var issues = new List<PreflightIssue>();
+        foreach (var op in ops.Where(o => o.Placed && o.Enabled && o.Op == "groove"))
+        {
+            var toolDia = ClearanceToolPick.DiameterOf(op.ToolId ?? TroyRecipe.TongueToolId);
+            var width = op.WidthMm ?? 0;
+            if (op.PocketTooSmallForTool)
+            {
+                issues.Add(new("error", "groove_too_narrow_for_tool",
+                    $"groove/{op.PanelId}/{op.FeatureId ?? "-"}: 槽宽 {width:0.###} 小于刀具 Ø{toolDia:0.###}，无法清满"));
+                continue;
+            }
+            if (CamStrategy.NeedsGrooveClear(width, toolDia)
+                && (op.PathSegments is null or { Count: 0 })
+                && (op.FinishLoop is null or { Count: < 3 }))
+            {
+                issues.Add(new("error", "groove_width_not_cleared",
+                    $"groove/{op.PanelId}/{op.FeatureId ?? "-"}: 槽宽 {width:0.###} > 刀径，未生成回转清底"));
+            }
+        }
+        return issues;
+    }
+
     static IEnumerable<(double X, double Y)> PointsOf(CutOp op)
     {
         if (op.Op == "drill" && op.SheetX is double sx && op.SheetY is double sy)
@@ -118,6 +147,17 @@ public static class NcPreflight
         if (op.Path is { Count: > 0 } path)
         {
             foreach (var p in path) yield return p;
+        }
+        if (op.PathSegments is { Count: > 0 })
+        {
+            foreach (var seg in op.PathSegments)
+            {
+                foreach (var p in seg) yield return p;
+            }
+        }
+        if (op.FinishLoop is { Count: > 0 } finish)
+        {
+            foreach (var p in finish) yield return p;
         }
     }
 }

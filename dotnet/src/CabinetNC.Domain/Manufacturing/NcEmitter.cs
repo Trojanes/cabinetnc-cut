@@ -29,7 +29,8 @@ public static partial class NcEmitter
             (o.Path is { Count: >= 2 }))).ToList();
         var drills = list.Where(o => o.Op == "drill" && o.SheetX is not null).ToList();
         var grooves = list.Where(o => o.Op == "groove" && o.Path is { Count: >= 2 }).ToList();
-        var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves)).ToList();
+        var remnants = list.Where(o => o.Op == "remnant" && o.Path is { Count: >= 2 }).ToList();
+        var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves).Concat(remnants)).ToList();
 
         // Prefer first bound tool's spindle over bare machine default when present
         var firstToolId = all.Select(o => o.ToolId).FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
@@ -98,6 +99,7 @@ public static partial class NcEmitter
                 else if (item.Op == "pocket") EmitPocket(lines, item, profile, feedXy, feedZ);
                 else if (item.Op == "drill") EmitDrill(lines, item, profile, feedZ);
                 else if (item.Op == "groove") EmitGroove(lines, item, profile, feedXy, feedZ);
+                else if (item.Op == "remnant") EmitGroove(lines, item, profile, feedXy, feedZ);
             }
         }
 
@@ -249,10 +251,39 @@ public static partial class NcEmitter
 
     static void EmitGroove(List<string> lines, CutOp g, MachineProfile profile, double feed, double feedZ)
     {
-        var path = g.Path!;
+        if (g.PocketTooSmallForTool)
+            return;
         var safeZ = profile.SafeZMm;
         var z = -Math.Abs(g.DepthMm ?? 0);
         lines.Add($"(groove {g.PanelId})");
+        if (g.PathSegments is { Count: > 0 } || g.FinishLoop is { Count: >= 3 })
+        {
+            if (g.PathSegments is { Count: > 0 })
+            {
+                foreach (var seg in g.PathSegments)
+                {
+                    if (seg.Count < 2) continue;
+                    lines.Add($"G0 Z{Fmt(safeZ)}");
+                    lines.Add($"G0 X{Fmt(seg[0].X)} Y{Fmt(seg[0].Y)}");
+                    lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
+                    for (var i = 1; i < seg.Count; i++)
+                        lines.Add($"G1 X{Fmt(seg[i].X)} Y{Fmt(seg[i].Y)} F{feed}");
+                }
+            }
+            if (g.FinishLoop is { Count: >= 3 } finish)
+            {
+                lines.Add($"G0 Z{Fmt(safeZ)}");
+                lines.Add($"G0 X{Fmt(finish[0].X)} Y{Fmt(finish[0].Y)}");
+                lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
+                for (var i = 1; i < finish.Count; i++)
+                    lines.Add($"G1 X{Fmt(finish[i].X)} Y{Fmt(finish[i].Y)} F{feed}");
+            }
+            lines.Add($"G0 Z{Fmt(safeZ)}");
+            return;
+        }
+
+        if (g.Path is not { Count: >= 2 } path)
+            return;
         lines.Add($"G0 X{Fmt(path[0].X)} Y{Fmt(path[0].Y)}");
         lines.Add($"G1 Z{Fmt(z)} F{feedZ}");
         for (var i = 1; i < path.Count; i++)

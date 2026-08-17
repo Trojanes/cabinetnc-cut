@@ -67,6 +67,10 @@ public sealed class ProjectCamSettings
     public double DrillRpm { get; set; } = 14500;
     public double DrillThrough { get; set; } = -0.55;
     public double DrillMaxExclusive { get; set; } = ClearanceToolPick.DrillMaxExclusiveMm;
+
+    public double GuillotineFeed { get; set; } = 9000;
+    public double GuillotinePlunge { get; set; } = 1000;
+    public double GuillotineThrough { get; set; } = -0.55;
 }
 
 public sealed class NestSheetDto

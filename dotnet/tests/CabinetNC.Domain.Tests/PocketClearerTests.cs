@@ -92,6 +92,46 @@ public class PocketClearerTests
     }
 
     [Fact]
+    public void Thirty_five_mm_hinge_spiral_cuts_directly_to_size_without_finish_loop()
+    {
+        var panel = new Panel
+        {
+            PanelId = "P",
+            ThicknessMm = 16,
+            Outline = new Outline
+            {
+                Points = [new(0, 0), new(200, 0), new(200, 150), new(0, 150)],
+            },
+            Features =
+            [
+                new PanelFeature
+                {
+                    FeatureId = "HINGE",
+                    Kind = "holeVertical",
+                    X = 80,
+                    Y = 60,
+                    DiameterMm = 35,
+                    DepthMm = 12,
+                },
+            ],
+        };
+
+        var op = Assert.Single(OpsPlanner.FeaturesToOps([panel]), o => o.FeatureId == "HINGE");
+        Assert.Equal("T2", op.ToolId);
+        Assert.Null(op.FinishLoop);
+        var spiral = Assert.Single(op.PathSegments!);
+        var toolCenterDiameter = Math.Max(
+            spiral.Max(p => p.X) - spiral.Min(p => p.X),
+            spiral.Max(p => p.Y) - spiral.Min(p => p.Y));
+        Assert.InRange(toolCenterDiameter + 10, 34.95, 35.05);
+        var final = spiral[^1];
+        Assert.True(
+            spiral.Count(p => Math.Abs(p.X - final.X) < 1e-6
+                && Math.Abs(p.Y - final.Y) < 1e-6) >= 2,
+            "outer clearance ring must close without a separate finish pass");
+    }
+
+    [Fact]
     public void Small_panel_warns_in_preflight()
     {
         var panel = new Panel

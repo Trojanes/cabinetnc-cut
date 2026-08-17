@@ -29,17 +29,28 @@
     <Resource Include="Assets\app.ico" />
   </ItemGroup>
 
-  <!-- Copy ComputeWorker next to Desktop so WorkerProcessHost can spawn it. -->
+  <!-- Copy ComputeWorker next to Desktop and into dist. MSBuild globs plus
+       PublishDir-as-dest previously dropped CabinetNC.ComputeWorker.dll, so
+       the desktop shortcut spawned an exe that exited immediately. -->
   <Target Name="CopyWorker" AfterTargets="Build;Publish">
     <PropertyGroup>
-      <_WorkerOut>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\CabinetNC.ComputeWorker\bin\$(Configuration)\net10.0\'))</_WorkerOut>
-      <_CopyDest Condition="'$(PublishDir)' != ''">$(PublishDir)</_CopyDest>
-      <_CopyDest Condition="'$(PublishDir)' == ''">$(OutputPath)</_CopyDest>
+      <_WorkerOut>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\CabinetNC.ComputeWorker\bin\$(Configuration)\net10.0'))</_WorkerOut>
+      <_DesktopOut>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)$(OutputPath)'))</_DesktopOut>
+      <_LaunchOut>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\dist\CabinetNC-Cut'))</_LaunchOut>
     </PropertyGroup>
-    <ItemGroup>
-      <_WorkerFiles Include="$(_WorkerOut)**\*.*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_WorkerFiles)" DestinationFiles="@(_WorkerFiles->'$(_CopyDest)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="Exists('$(_WorkerOut)CabinetNC.ComputeWorker.exe')" />
+    <Error Text="ComputeWorker output missing: $(_WorkerOut)\CabinetNC.ComputeWorker.dll"
+           Condition="!Exists('$(_WorkerOut)\CabinetNC.ComputeWorker.dll')" />
+    <MakeDir Directories="$(_DesktopOut)" />
+    <Exec Command="powershell -NoProfile -Command Copy-Item -Path '$(_WorkerOut)\*' -Destination '$(_DesktopOut)' -Recurse -Force"
+          IgnoreExitCode="false" />
+    <Error Text="CopyWorker missed CabinetNC.ComputeWorker.dll under $(_DesktopOut)"
+           Condition="!Exists('$(_DesktopOut)\CabinetNC.ComputeWorker.dll')" />
+    <MakeDir Directories="$(_LaunchOut)" Condition="'$(Configuration)' == 'Release'" />
+    <Exec Command="powershell -NoProfile -Command Copy-Item -Path '$(_WorkerOut)\*' -Destination '$(_LaunchOut)' -Recurse -Force"
+          IgnoreExitCode="false"
+          Condition="'$(Configuration)' == 'Release'" />
+    <Error Text="CopyWorker missed CabinetNC.ComputeWorker.dll under $(_LaunchOut)"
+           Condition="'$(Configuration)' == 'Release' AND !Exists('$(_LaunchOut)\CabinetNC.ComputeWorker.dll')" />
   </Target>
 
   <!-- One user-facing build: desktop shortcut launches dist\CabinetNC-Cut. -->
@@ -49,7 +60,8 @@
       <_DesktopLaunch>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\dist\CabinetNC-Cut\'))</_DesktopLaunch>
     </PropertyGroup>
     <ItemGroup>
-      <_LaunchFiles Include="$(OutputPath)**\*.*" Exclude="$(OutputPath)publish\**\*.*" />
+      <_LaunchFiles Include="$(OutputPath)*" Exclude="$(OutputPath)publish\**\*" />
+      <_LaunchFiles Include="$(OutputPath)**\*" Exclude="$(OutputPath)publish\**\*" />
     </ItemGroup>
     <MakeDir Directories="$(_DesktopLaunch)" />
     <Copy SourceFiles="@(_LaunchFiles)"

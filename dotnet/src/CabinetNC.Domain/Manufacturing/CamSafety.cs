@@ -20,6 +20,7 @@ public static class CamSafety
         if (kind is "pocket" or "groove") return 2;
         if (kind == "contour" && !string.IsNullOrWhiteSpace(op.FeatureId)) return 3;
         if (kind == "contour") return 4;
+        if (kind == "remnant") return 5;
         return 9;
     }
 

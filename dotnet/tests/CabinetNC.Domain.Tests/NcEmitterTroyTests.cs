@@ -153,6 +153,45 @@ public class NcEmitterTroyTests
     }
 
     [Fact]
+    public void Groove_stays_at_cut_depth_when_finish_starts_at_spiral_end()
+    {
+        var groove = Tongue() with
+        {
+            Path = [(10, 10), (20, 10)],
+            PathSegments =
+            [
+                new (double X, double Y)[] { (10, 10), (20, 10) },
+            ],
+            FinishLoop = [(20, 10), (20, 20), (10, 20), (10, 10), (20, 10)],
+        };
+
+        var nc = Troy(groove);
+
+        Assert.True(
+            Lines(nc).Count(l => l.Contains("G0 Z30.0000", StringComparison.Ordinal)) == 2,
+            nc);
+        Assert.Equal(1, Lines(nc).Count(l => l.Contains("G1 Z9.0000", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Pocket_stays_at_cut_depth_when_finish_starts_at_spiral_end()
+    {
+        var pocket = Pocket() with
+        {
+            PathSegments =
+            [
+                new (double X, double Y)[] { (10, 10), (20, 10) },
+            ],
+            FinishLoop = [(20, 10), (20, 20), (10, 20), (10, 10), (20, 10)],
+        };
+
+        var nc = Troy(pocket);
+
+        Assert.Equal(2, Lines(nc).Count(l => l.Contains("G0 Z30.0000", StringComparison.Ordinal)));
+        Assert.Equal(1, Lines(nc).Count(l => l.Contains("G1 Z6.0000", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void Blind_drill_stops_above_bottom_through_drill_overshoots()
     {
         var blind = Troy(Drill(through: false, depth: 12, th: 18));
@@ -164,7 +203,7 @@ public class NcEmitterTroyTests
     }
 
     [Fact]
-    public void Last_pass_rapids_over_bridges()
+    public void Last_pass_follows_same_xy_over_bridges_at_leave_z()
     {
         var recipe = new PostRecipe
         {
@@ -183,10 +222,58 @@ public class NcEmitterTroyTests
             ],
         };
         var nc = NcEmitter.OpsToNc([Outer()], Machine(), recipe: recipe);
-        Assert.Contains("G0 Z30.0000", nc);
-        Assert.Contains("G0 X105.0000", nc);
         Assert.Contains("Z-0.5500", nc);
         Assert.Contains("F20000.0", nc);
+        Assert.Equal(2, Lines(nc).Count(l =>
+            l.Contains("G1 Z1.4500 F1000.0", StringComparison.Ordinal)));
+        Assert.DoesNotContain("G0 X105.0000", nc);
+        Assert.Contains("G1 X105.0000", nc);
+    }
+
+    [Fact]
+    public void Paired_bridges_are_emitted_on_both_panel_profiles()
+    {
+        var a = Outer("A");
+        var b = Outer("B") with
+        {
+            Path = [(220, 0), (420, 0), (420, 100), (220, 100)],
+        };
+        var recipe = new PostRecipe
+        {
+            Bridges =
+            [
+                new ProfileBridge
+                {
+                    Id = "a",
+                    PairId = "b",
+                    PanelId = "A",
+                    SheetIndex = 0,
+                    ArcLengthMm = 100,
+                    X = 100,
+                    Y = 0,
+                    WidthMm = 10,
+                },
+                new ProfileBridge
+                {
+                    Id = "b",
+                    PairId = "a",
+                    PanelId = "B",
+                    SheetIndex = 0,
+                    ArcLengthMm = 100,
+                    X = 320,
+                    Y = 0,
+                    WidthMm = 10,
+                },
+            ],
+        };
+
+        var nc = NcEmitter.OpsToNc([a, b], Machine(), recipe: recipe);
+
+        // Normal first-pass plunges stay at 0.5; both passes preserve each pair at 1.45.
+        Assert.Equal(4, Lines(nc).Count(l =>
+            l.Contains("G1 Z0.5000 F1000.0", StringComparison.Ordinal)));
+        Assert.Equal(4, Lines(nc).Count(l =>
+            l.Contains("G1 Z1.4500 F1000.0", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -200,6 +287,80 @@ public class NcEmitterTroyTests
         var nc = NcEmitter.OpsToNc([square], Machine(), recipe: recipe);
         Assert.Contains("G1 X29.5000 Z0.5000 F1000.0", nc);
         Assert.Contains("F12000.0", nc);
+    }
+
+    [Fact]
+    public void Shop_sample_plan_to_nc_writes_inspectable_file()
+    {
+        var panel = new CabinetNC.Domain.Parts.Panel
+        {
+            PanelId = "A",
+            ThicknessMm = 18,
+            Outline = new CabinetNC.Domain.Geometry.Outline
+            {
+                Points = [new(0, 0), new(400, 0), new(400, 800), new(0, 800)],
+            },
+        };
+        var places = new[]
+        {
+            new CabinetNC.Domain.Nesting.NestPlacement
+            {
+                PanelId = "A", SheetIndex = 0, OffsetX = 50, OffsetY = 50,
+            },
+        };
+        var plan = CabinetNC.Domain.Nesting.GuillotineCutPlanner.PlanForSheet(
+            [panel], places, 0, 1220, 2440, 20, 400);
+        Assert.NotNull(plan);
+        var remnant = CabinetNC.Domain.Nesting.GuillotineCutPlanner.ToCutOp(
+            plan!, 0, 1220, 2440, 18, 10);
+        Assert.NotNull(remnant);
+        var nc = NcEmitter.OpsToNc([Outer(), remnant!], Machine(), recipe: PostRecipe.TroyDefault());
+        var path = Path.Combine(Path.GetTempPath(), "omnicam-guillotine-sample.anc");
+        File.WriteAllText(path, nc);
+        Assert.Contains("F20000.0", nc);
+        Assert.Contains("F9000.0", nc);
+        Assert.Contains("Z-0.5500", nc);
+        var f20 = nc.LastIndexOf("F20000.0", StringComparison.Ordinal);
+        var f9 = nc.LastIndexOf("F9000.0", StringComparison.Ordinal);
+        Assert.True(f9 > f20, "remnant feed must follow profile last");
+        var body = Lines(nc).Where(l => l.Length > 0).ToList();
+        Assert.Contains("G0 X0.0000 Y0.0000", body[^5]);
+    }
+
+    [Fact]
+    public void Guillotine_cut_follows_profile_last_then_homes_xy()
+    {
+        var remnant = new CutOp
+        {
+            Op = "remnant",
+            PanelId = "SHEET-0-REMNANT",
+            FeatureId = "guillotine",
+            ToolId = "T2",
+            Placed = true,
+            ClosePath = false,
+            Through = true,
+            ThicknessMm = 18,
+            DepthMm = 18.5,
+            Path = [(470, -5), (470, 1005)],
+        };
+        var recipe = new PostRecipe
+        {
+            GuillotineFeed = 9000,
+            GuillotinePlunge = 1000,
+            GuillotineThroughZMm = -0.55,
+            HomeXyAtEnd = true,
+        };
+        var nc = NcEmitter.OpsToNc([Outer(), remnant], Machine(), recipe: recipe);
+        var f20 = nc.LastIndexOf("F20000.0", StringComparison.Ordinal);
+        var cutX = nc.LastIndexOf("X470.0000", StringComparison.Ordinal);
+        var plunge = nc.IndexOf("G1 Z-0.5500 F1000.0", StringComparison.Ordinal);
+        Assert.True(f20 >= 0 && cutX > f20);
+        Assert.True(plunge >= 0);
+        Assert.Contains("F9000.0", nc);
+        var body = Lines(nc).Where(l => l.Length > 0).ToList();
+        Assert.Contains("G0 X0.0000 Y0.0000", body[^5]);
+        Assert.EndsWith(" G80", body[^4]);
+        Assert.EndsWith(" M30", body[^1]);
     }
 
     [Fact]

@@ -611,7 +611,25 @@ static class CanvasPainter
             SKColor Color(byte r, byte g, byte b) =>
                 active ? new SKColor(0xFF, 0xC1, 0x07) : new SKColor(r, g, b, alpha);
 
-            if (op.Op == "contour" && op.Path is { Count: >= 2 } path)
+            if (op.Op == "remnant" && op.Path is { Count: >= 2 } remnantPath)
+            {
+                using var sk = new SKPath();
+                for (var i = 0; i < remnantPath.Count; i++)
+                {
+                    var sx = toSx(remnantPath[i].X);
+                    var sy = toSy(remnantPath[i].Y);
+                    if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                }
+                using var paint = new SKPaint
+                {
+                    Color = Color(0xC4, 0x5A, 0x00),
+                    IsStroke = true,
+                    StrokeWidth = active ? 4f : focused ? 2.8f : 1.6f,
+                    IsAntialias = true,
+                };
+                canvas.DrawPath(sk, paint);
+            }
+            else if (op.Op == "contour" && op.Path is { Count: >= 2 } path)
             {
                 using var sk = new SKPath();
                 for (var i = 0; i < path.Count; i++)
@@ -712,43 +730,83 @@ static class CanvasPainter
                     canvas.DrawPath(sk, finish);
                 }
             }
-            else if (op.Op == "groove" && op.Path is { Count: >= 2 } gpath)
+            else if (op.Op == "groove")
             {
-                var center = gpath.Select(p => new Point2(p.X, p.Y)).ToList();
-                var outline = GrooveGeometry.OutlineFromCenterline(
-                    center,
-                    op.WidthMm is > 1e-9 ? op.WidthMm.Value : 0);
-                using var sk = new SKPath();
-                if (outline.Count >= 3)
-                {
-                    for (var i = 0; i < outline.Count; i++)
-                    {
-                        var sx = toSx(outline[i].X);
-                        var sy = toSy(outline[i].Y);
-                        if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
-                    }
-                    sk.Close();
-                }
-                else
-                {
-                    for (var i = 0; i < gpath.Count; i++)
-                    {
-                        var sx = toSx(gpath[i].X);
-                        var sy = toSy(gpath[i].Y);
-                        if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
-                    }
-                }
                 var grooveColor = op.IsTongue
                     ? Color(0xE6, 0x7E, 0x22)
                     : Color(0x2E, 0xA8, 0x4A);
-                using var paint = new SKPaint
+                if (op.PathSegments is { Count: > 0 } || op.FinishLoop is { Count: >= 3 })
                 {
-                    Color = grooveColor,
-                    IsStroke = true,
-                    StrokeWidth = active ? 3f : focused ? 1.8f : 1f,
-                    IsAntialias = true,
-                };
-                canvas.DrawPath(sk, paint);
+                    using var paint = new SKPaint
+                    {
+                        Color = grooveColor,
+                        IsStroke = true,
+                        StrokeWidth = active ? 3f : focused ? 1.8f : 1f,
+                        IsAntialias = true,
+                    };
+                    if (op.PathSegments is { Count: > 0 })
+                    {
+                        foreach (var seg in op.PathSegments)
+                        {
+                            if (seg.Count < 2) continue;
+                            using var sk = new SKPath();
+                            for (var i = 0; i < seg.Count; i++)
+                            {
+                                var sx = toSx(seg[i].X);
+                                var sy = toSy(seg[i].Y);
+                                if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                            }
+                            canvas.DrawPath(sk, paint);
+                        }
+                    }
+                    if (op.FinishLoop is { Count: >= 3 } loop)
+                    {
+                        using var sk = new SKPath();
+                        for (var i = 0; i < loop.Count; i++)
+                        {
+                            var sx = toSx(loop[i].X);
+                            var sy = toSy(loop[i].Y);
+                            if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                        }
+                        sk.Close();
+                        canvas.DrawPath(sk, paint);
+                    }
+                }
+                else if (op.Path is { Count: >= 2 } gpath)
+                {
+                    var center = gpath.Select(p => new Point2(p.X, p.Y)).ToList();
+                    var outline = GrooveGeometry.OutlineFromCenterline(
+                        center,
+                        op.WidthMm is > 1e-9 ? op.WidthMm.Value : 0);
+                    using var sk = new SKPath();
+                    if (outline.Count >= 3)
+                    {
+                        for (var i = 0; i < outline.Count; i++)
+                        {
+                            var sx = toSx(outline[i].X);
+                            var sy = toSy(outline[i].Y);
+                            if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                        }
+                        sk.Close();
+                    }
+                    else
+                    {
+                        for (var i = 0; i < gpath.Count; i++)
+                        {
+                            var sx = toSx(gpath[i].X);
+                            var sy = toSy(gpath[i].Y);
+                            if (i == 0) sk.MoveTo(sx, sy); else sk.LineTo(sx, sy);
+                        }
+                    }
+                    using var paint = new SKPaint
+                    {
+                        Color = grooveColor,
+                        IsStroke = true,
+                        StrokeWidth = active ? 3f : focused ? 1.8f : 1f,
+                        IsAntialias = true,
+                    };
+                    canvas.DrawPath(sk, paint);
+                }
             }
         }
 

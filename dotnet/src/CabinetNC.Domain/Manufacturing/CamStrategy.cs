@@ -9,6 +9,7 @@ public enum CamStrategyKind
     Drilling,
     AreaClearance,
     Profile,
+    Guillotine,
 }
 
 /// <summary>Troy shop cutting order shown on stage 4.</summary>
@@ -35,7 +36,11 @@ public static class TroyRecipe
     public const double SpindleRpm = 14500;
     public const double SafeZMm = 30;
     public const double LastPassLeaveMm = 0.5;
+    public const double BridgeLeaveMm = 1.45;
     public const double ThroughZMm = -0.55;
+    public const double GuillotineFeedMmMin = 9000;
+    public const double GuillotinePlungeMmMin = 1000;
+    public const double GuillotineThroughZMm = -0.55;
 }
 
 public static class CamStrategy
@@ -43,11 +48,17 @@ public static class CamStrategy
     /// <summary>Groove wider than this × tool Ø is cleared, not a single profile pass.</summary>
     public const double WideGrooveFactor = 1.15;
 
+    public static bool NeedsGrooveClear(double widthMm, double toolDiameterMm) =>
+        widthMm > 1e-9 && toolDiameterMm > 1e-9
+        && widthMm > toolDiameterMm * WideGrooveFactor;
+
     public static CamStrategyKind Classify(CutOp op, double toolDiameterMm = 0)
     {
         var kind = op.Op ?? "";
         if (kind.Equals("drill", StringComparison.OrdinalIgnoreCase))
             return CamStrategyKind.Drilling;
+        if (kind.Equals("remnant", StringComparison.OrdinalIgnoreCase))
+            return CamStrategyKind.Guillotine;
         if (kind.Equals("pocket", StringComparison.OrdinalIgnoreCase))
             return CamStrategyKind.AreaClearance;
         if (kind.Equals("groove", StringComparison.OrdinalIgnoreCase))
@@ -59,6 +70,7 @@ public static class CamStrategy
     {
         CamStrategyKind.Drilling => "Drilling",
         CamStrategyKind.AreaClearance => "Area Clearance",
+        CamStrategyKind.Guillotine => "Guillotine cut",
         _ => "Profile",
     };
 
@@ -66,6 +78,7 @@ public static class CamStrategy
     {
         CamStrategyKind.Drilling => "孔",
         CamStrategyKind.AreaClearance => "口袋 / 宽槽清底",
+        CamStrategyKind.Guillotine => "余料分割线",
         _ => "外轮廓 / 开窗 / 半槽",
     };
 }
@@ -114,7 +127,7 @@ public static class TroyPass
 
     public static string Hint(TroyPassKind kind) => kind switch
     {
-        TroyPassKind.TongueGroove => "插 tongue · Ø6.35 · F9000 · 按槽深",
+        TroyPassKind.TongueGroove => "插 tongue · Ø6.35 · F9000 · 按槽深；宽于刀则回转清满",
         TroyPassKind.UnclassifiedGroove => "未标 tongue，按槽宽选刀。点开可改成半槽",
         TroyPassKind.Clearance => "口袋 / 铰杯 / 其它槽 · 按短边选刀 · F12000",
         TroyPassKind.ProfileFirst => "留皮 0.5mm · F12000",

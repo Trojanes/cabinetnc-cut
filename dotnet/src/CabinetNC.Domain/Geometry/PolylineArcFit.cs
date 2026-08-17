@@ -1,14 +1,17 @@
 namespace CabinetNC.Domain.Geometry;
 
 /// <summary>
-/// Collapse Clipper round-join fans into OSAI <c>G2/G3 R</c> arcs.
+/// Collapse real corner/cup fans into OSAI <c>G2/G3 R</c> arcs.
+/// Shallow bows (R larger than shop fillets) become one <c>G1</c> — they are
+/// tessellated straight edges, not part radii.
 /// Sharp polyline corners stay as <c>G1</c> (a 3-point L is not an arc).
 /// </summary>
 public static class PolylineArcFit
 {
     public const double PointTolMm = 0.05;
     public const double MinRadiusMm = 0.5;
-    public const double MaxRadiusMm = 400;
+    /// <summary>Above shop snap radii (≤21.58). R256-class “straight” edges stay G1.</summary>
+    public const double MaxRadiusMm = 22;
     public const double MinSweepDeg = 8;
     public const double MinSagittaMm = 0.06;
 
@@ -41,8 +44,9 @@ public static class PolylineArcFit
                 i = end;
                 continue;
             }
-            segs.Add(new Seg(false, false, pts[i + 1].X, pts[i + 1].Y, 0));
-            i++;
+            var straight = GrowStraight(pts, i);
+            segs.Add(new Seg(false, false, pts[straight].X, pts[straight].Y, 0));
+            i = straight;
         }
         return segs;
     }
@@ -105,6 +109,85 @@ public static class PolylineArcFit
         if (sweepDeg < MinSweepDeg && sagitta < MinSagittaMm) return false;
         if (sagitta < MinSagittaMm && end < i + 3) return false;
         return true;
+    }
+
+    /// <summary>
+    /// Collapse a tessellated shallow bow (R &gt; <see cref="MaxRadiusMm"/>) or
+    /// a colinear run into one chord. Stops before a real corner fan.
+    /// </summary>
+    static int GrowStraight(IReadOnlyList<(double X, double Y)> pts, int i)
+    {
+        var end = i + 1;
+        for (var j = i + 2; j < pts.Count; j++)
+        {
+            if (!IsStraightish(pts, i, j))
+                break;
+            end = j;
+        }
+        return end;
+    }
+
+    static bool IsStraightish(IReadOnlyList<(double X, double Y)> pts, int i, int j)
+    {
+        if (j <= i + 1) return true;
+        if (HasSharpCorner(pts, i, j))
+            return false;
+        if (AllOnChord(pts, i, j))
+            return true;
+        var mid = (i + j) / 2;
+        if (mid <= i) mid = i + 1;
+        if (mid >= j) mid = j - 1;
+        if (!CircleThrough(pts[i], pts[mid], pts[j], out var cx, out var cy, out var r, out var cw)
+            && !CircleThrough(pts[i], pts[i + 1], pts[j], out cx, out cy, out r, out cw))
+            return false;
+        if (r <= MaxRadiusMm)
+            return false;
+        return AllOnCircle(pts, i, j, cx, cy, r) && SameTurn(pts, i, j, cw);
+    }
+
+    static bool HasSharpCorner(IReadOnlyList<(double X, double Y)> pts, int i, int j)
+    {
+        const double maxTurnDeg = 18;
+        for (var k = i + 1; k < j; k++)
+        {
+            var ax = pts[k].X - pts[k - 1].X;
+            var ay = pts[k].Y - pts[k - 1].Y;
+            var bx = pts[k + 1].X - pts[k].X;
+            var by = pts[k + 1].Y - pts[k].Y;
+            var d0 = Math.Sqrt(ax * ax + ay * ay);
+            var d1 = Math.Sqrt(bx * bx + by * by);
+            if (d0 < 1e-9 || d1 < 1e-9) continue;
+            var cross = ax * by - ay * bx;
+            var dot = ax * bx + ay * by;
+            var deg = Math.Abs(Math.Atan2(cross, dot)) * 180 / Math.PI;
+            if (deg > maxTurnDeg) return true;
+        }
+        return false;
+    }
+
+    static bool AllOnChord(IReadOnlyList<(double X, double Y)> pts, int i, int j)
+    {
+        var a = pts[i];
+        var b = pts[j];
+        var chord = Dist(a, b);
+        if (chord < 1e-9) return false;
+        for (var k = i + 1; k < j; k++)
+        {
+            if (DistToSegment(pts[k], a, b) > PointTolMm)
+                return false;
+        }
+        return true;
+    }
+
+    static double DistToSegment((double X, double Y) p, (double X, double Y) a, (double X, double Y) b)
+    {
+        var dx = b.X - a.X;
+        var dy = b.Y - a.Y;
+        var len2 = dx * dx + dy * dy;
+        if (len2 < 1e-18) return Dist(p, a);
+        var t = ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / len2;
+        t = Math.Clamp(t, 0, 1);
+        return Dist(p, (a.X + t * dx, a.Y + t * dy));
     }
 
     static bool AcceptArc(
@@ -172,7 +255,7 @@ public static class PolylineArcFit
     }
 
     static bool ShortChord((double X, double Y) a, (double X, double Y) b, double r) =>
-        Dist(a, b) <= Math.Max(2.2, 0.45 * r);
+        Dist(a, b) <= Math.Max(2.5, 0.45 * r);
 
     static double SweepDeg(
         (double X, double Y) start,

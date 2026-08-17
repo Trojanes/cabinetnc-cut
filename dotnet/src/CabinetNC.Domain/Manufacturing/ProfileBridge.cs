@@ -192,8 +192,19 @@ public static class ProfileBridgePlanner
     {
         if (bridges.Count == 0) return bridges;
         var result = new List<ProfileBridge>(bridges.Count);
+        var representedSheets = ops
+            .Where(o => o.Placed && o.Op == "contour" && o.Path is { Count: >= 2 })
+            .Select(o => o.SheetIndex)
+            .ToHashSet();
         foreach (var b in bridges)
         {
+            // A single-sheet CAM refresh must not delete bridges belonging to
+            // other sheets that are intentionally absent from this ops scope.
+            if (!representedSheets.Contains(b.SheetIndex))
+            {
+                result.Add(b);
+                continue;
+            }
             var op = ops.FirstOrDefault(o =>
                 o.Placed
                 && o.SheetIndex == b.SheetIndex

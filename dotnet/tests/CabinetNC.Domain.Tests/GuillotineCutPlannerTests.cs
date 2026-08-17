@@ -1,4 +1,5 @@
 using CabinetNC.Domain.Geometry;
+using CabinetNC.Domain.Manufacturing;
 using CabinetNC.Domain.Nesting;
 using CabinetNC.Domain.Parts;
 
@@ -124,5 +125,37 @@ public class GuillotineCutPlannerTests
         var plan = GuillotineCutPlanner.PlanForSheet(
             [Rect("A", 100, 100)], [], 0, 1220, 2440);
         Assert.Null(plan);
+    }
+
+    [Fact]
+    public void ToCutOp_is_open_through_remnant_with_edge_overshoot()
+    {
+        var plan = new GuillotineCutPlanner.Result
+        {
+            Kind = "vertical",
+            Polyline = [(470, 0), (470, 1000)],
+            RemnantAreaMm2 = 470 * 1000,
+            RemnantMinEdgeMm = 470,
+            Label = "竖切",
+        };
+        var op = GuillotineCutPlanner.ToCutOp(plan, 0, 1220, 1000, 18, toolDiameterMm: 10);
+        Assert.NotNull(op);
+        Assert.Equal("remnant", op!.Op);
+        Assert.False(op.ClosePath);
+        Assert.True(op.Through);
+        Assert.Equal("T2", op.ToolId);
+        Assert.Equal(2, op.Path!.Count);
+        Assert.Equal(470, op.Path[0].X, 3);
+        Assert.True(op.Path[0].Y < -4.9);
+        Assert.True(op.Path[1].Y > 1004.9);
+        Assert.Equal(CamStrategyKind.Guillotine, CamStrategy.Classify(op));
+        Assert.Equal(5, CamSafety.SequenceRank(op));
+
+        var report = NcPreflight.Check(
+            [op],
+            CabinetNC.Domain.Machines.MachineCatalog.Get("nesting_router_6"),
+            1220, 1000);
+        Assert.True(report.Ok, NcPreflight.Format(report));
+        Assert.DoesNotContain(report.Issues, i => i.Code == "out_of_sheet");
     }
 }

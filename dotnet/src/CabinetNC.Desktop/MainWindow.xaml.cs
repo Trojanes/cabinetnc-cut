@@ -94,6 +94,9 @@ public partial class MainWindow : Window
     double _drillRpm = TroyRecipe.SpindleRpm;
     double _drillThrough = TroyRecipe.ThroughZMm;
     double _drillMaxExclusive = ClearanceToolPick.DrillMaxExclusiveMm;
+    double _guillotineFeed = TroyRecipe.GuillotineFeedMmMin;
+    double _guillotinePlunge = TroyRecipe.GuillotinePlungeMmMin;
+    double _guillotineThrough = TroyRecipe.GuillotineThroughZMm;
     bool _bridgeManualMode;
     bool _bridgeDeleteMode;
     readonly List<ProfileBridge> _profileBridges = [];
@@ -1342,6 +1345,7 @@ public partial class MainWindow : Window
         _opsOverlay = _opsOverlay
             .Where(PassEnabled)
             .ToList();
+        _opsOverlay = _opsOverlay.Concat(BuildGuillotineOps()).ToList();
         var kept = ProfileBridgePlanner.Reproject(_profileBridges, _opsOverlay);
         _profileBridges.Clear();
         _profileBridges.AddRange(kept);
@@ -1364,7 +1368,39 @@ public partial class MainWindow : Window
             return _enableClearance;
         if (kind.Equals("contour", StringComparison.OrdinalIgnoreCase))
             return _enableProfile || _enableProfileLast;
+        if (kind.Equals(GuillotineCutPlanner.OpKind, StringComparison.OrdinalIgnoreCase))
+            return true;
         return true;
+    }
+
+    IReadOnlyList<CutOp> BuildGuillotineOps()
+    {
+        var ops = new List<CutOp>();
+        foreach (var (sheet, plan) in _guillotineBySheet)
+        {
+            if (!_opsAllSheets && sheet != _activeNestSheet) continue;
+            var (sw, sh, th) = SheetCamMetrics(sheet);
+            var op = GuillotineCutPlanner.ToCutOp(plan, sheet, sw, sh, th, toolDiameterMm: 10);
+            if (op is not null) ops.Add(op);
+        }
+        return ops;
+    }
+
+    (double Width, double Length, double Thickness) SheetCamMetrics(int sheet)
+    {
+        if (sheet >= 0 && sheet < _nestSheetsUsed.Count)
+        {
+            var s = _nestSheetsUsed[sheet];
+            var th = s.ThicknessMm > 0
+                ? s.ThicknessMm
+                : _session.Package?.Panels.FirstOrDefault()?.ThicknessMm ?? 18;
+            return (s.WidthMm, s.LengthMm, th > 0 ? th : 18);
+        }
+        var pkgSheet = _session.Package?.Sheets.FirstOrDefault();
+        var w = ParseMm(StockWidthBox.Text, pkgSheet?.WidthMm > 0 ? pkgSheet.WidthMm : 1220);
+        var h = ParseMm(StockLengthBox.Text, pkgSheet?.LengthMm > 0 ? pkgSheet.LengthMm : 2440);
+        var fallbackTh = _session.Package?.Panels.FirstOrDefault()?.ThicknessMm ?? 18;
+        return (w, h, fallbackTh > 0 ? fallbackTh : 18);
     }
 
     double ToolDiameterOf(CutOp op)
@@ -1394,9 +1430,13 @@ public partial class MainWindow : Window
         var nProfile = _opsOverlay.Count(o => CamStrategy.Classify(o) == CamStrategyKind.Profile);
         var nClear = _opsOverlay.Count(o => CamStrategy.Classify(o) == CamStrategyKind.AreaClearance);
         var nDrill = _opsOverlay.Count(o => CamStrategy.Classify(o) == CamStrategyKind.Drilling);
+        var nGuill = _opsOverlay.Count(o => CamStrategy.Classify(o) == CamStrategyKind.Guillotine);
         OpsIconProfileCount.Text = nProfile > 0 ? $"{nProfile}" : "";
         OpsIconClearanceCount.Text = nClear > 0 ? $"{nClear}" : "";
         OpsIconDrillCount.Text = nDrill > 0 ? $"{nDrill}" : "";
+        RefreshGuillotineBox();
+        if (nGuill > 0)
+            OpsIconGuillotineCount.Text = $"{nGuill}";
         _opsSummary = _nest is not { Ok: true }
             ? "请先完成密排"
             : _opsOverlay.Count == 0
@@ -1492,11 +1532,35 @@ public partial class MainWindow : Window
             ParseMm(DrillMaxExclusive.Text, ClearanceToolPick.DrillMaxExclusiveMm));
     }
 
+    void OnGuillotineFieldChanged(object sender, RoutedEventArgs e) => ReadGuillotineFields();
+
+    void ReadGuillotineFields()
+    {
+        if (_syncingOpsStrategy) return;
+        _guillotineFeed = ParseMm(GuillotineFeed.Text, TroyRecipe.GuillotineFeedMmMin);
+        _guillotinePlunge = ParseMm(GuillotinePlunge.Text, TroyRecipe.GuillotinePlungeMmMin);
+        _guillotineThrough = ParseSigned(GuillotineThrough.Text, TroyRecipe.GuillotineThroughZMm);
+    }
+
+    void RefreshGuillotineBox()
+    {
+        var n = _guillotineBySheet.Count;
+        var show = n > 0;
+        OpsIconGuillotine.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        OpsIconGuillotineCount.Text = show ? $"{n}" : "";
+        if (!show && _opsStrategy is CamStrategyKind.Guillotine)
+        {
+            _opsStrategy = null;
+            ApplyOpsChrome();
+        }
+    }
+
     PostRecipe CurrentPostRecipe()
     {
         ReadProfileFields();
         ReadClearanceFields();
         ReadDrillFields();
+        ReadGuillotineFields();
         _homeXyAtEnd = OpsHomeXyChk.IsChecked == true;
         return new PostRecipe
         {
@@ -1520,8 +1584,11 @@ public partial class MainWindow : Window
             DrillPlunge = _drillPlunge,
             DrillRpm = _drillRpm,
             DrillThroughZMm = _drillThrough,
+            GuillotineFeed = _guillotineFeed,
+            GuillotinePlunge = _guillotinePlunge,
+            GuillotineThroughZMm = _guillotineThrough,
             HomeXyAtEnd = _homeXyAtEnd,
-            Bridges = _profileBridges.ToList(),
+            Bridges = _enableBridges ? _profileBridges.ToList() : [],
         };
     }
 
@@ -1587,11 +1654,13 @@ public partial class MainWindow : Window
         OpsParamsProfile.Visibility = _opsStrategy is CamStrategyKind.Profile ? Visibility.Visible : Visibility.Collapsed;
         OpsParamsClearance.Visibility = _opsStrategy is CamStrategyKind.AreaClearance ? Visibility.Visible : Visibility.Collapsed;
         OpsParamsDrill.Visibility = _opsStrategy is CamStrategyKind.Drilling ? Visibility.Visible : Visibility.Collapsed;
+        OpsParamsGuillotine.Visibility = _opsStrategy is CamStrategyKind.Guillotine ? Visibility.Visible : Visibility.Collapsed;
         OpsParamsTitle.Text = _opsStrategy switch
         {
             CamStrategyKind.Profile => "Profiling",
             CamStrategyKind.AreaClearance => "Area Clearance",
             CamStrategyKind.Drilling => "Drilling",
+            CamStrategyKind.Guillotine => "Guillotine cut",
             _ => "刀路参数",
         };
         _opsFocus = _opsStrategy switch
@@ -1605,6 +1674,7 @@ public partial class MainWindow : Window
         OpsIconProfile.IsChecked = _opsStrategy is CamStrategyKind.Profile;
         OpsIconClearance.IsChecked = _opsStrategy is CamStrategyKind.AreaClearance;
         OpsIconDrill.IsChecked = _opsStrategy is CamStrategyKind.Drilling;
+        OpsIconGuillotine.IsChecked = _opsStrategy is CamStrategyKind.Guillotine;
         _syncingOpsIcons = false;
     }
 
@@ -1695,6 +1765,7 @@ public partial class MainWindow : Window
             _profileBridges.Clear();
             _profileBridges.AddRange(result.Bridges);
             RefreshBridgeCount();
+            RegenerateNcFromCurrentOps();
             CanvasHost.InvalidateVisual();
         }
         SetStatus(result.Message);
@@ -1739,6 +1810,7 @@ public partial class MainWindow : Window
             _profileBridges.Clear();
             _profileBridges.AddRange(result.Bridges);
             RefreshBridgeCount();
+            RegenerateNcFromCurrentOps();
             CanvasHost.InvalidateVisual();
         }
         SetStatus(result.Message);
@@ -1757,6 +1829,7 @@ public partial class MainWindow : Window
             _profileBridges.Clear();
             _profileBridges.AddRange(result.Bridges);
             RefreshBridgeCount();
+            RegenerateNcFromCurrentOps();
             CanvasHost.InvalidateVisual();
         }
         SetStatus(result.Message);
@@ -1900,6 +1973,7 @@ public partial class MainWindow : Window
             _profileBridges.Clear();
             _profileBridges.AddRange(result.Bridges);
             RefreshBridgeCount();
+            RegenerateNcFromCurrentOps();
             CanvasHost.InvalidateVisual();
         }
         SetStatus(result.Message + (_profileBridges.Count > 0 ? $" · 共 {_profileBridges.Count} 个" : ""));
@@ -1919,6 +1993,7 @@ public partial class MainWindow : Window
             _profileBridges.Clear();
             _profileBridges.AddRange(result.Bridges);
             RefreshBridgeCount();
+            RegenerateNcFromCurrentOps();
             CanvasHost.InvalidateVisual();
         }
         SetStatus(result.Message + (_profileBridges.Count > 0 ? $" · 剩 {_profileBridges.Count} 个" : ""));
@@ -2070,6 +2145,9 @@ public partial class MainWindow : Window
         {
             _guillotineBySheet.Remove(_activeNestSheet);
             SetStatus($"大板 {_activeNestSheet + 1}: 已清除余料线");
+            if (_opsOverlay.Count > 0)
+                RebuildOpsOverlay();
+            RefreshGuillotineBox();
             CanvasHost.InvalidateVisual();
             return;
         }
@@ -2097,6 +2175,9 @@ public partial class MainWindow : Window
 
         _guillotineBySheet[_activeNestSheet] = plan;
         SetStatus($"大板 {_activeNestSheet + 1}: {plan.Label}");
+        if (_opsOverlay.Count > 0)
+            RebuildOpsOverlay();
+        RefreshGuillotineBox();
         CanvasHost.InvalidateVisual();
     }
 
@@ -2457,6 +2538,9 @@ public partial class MainWindow : Window
                 DrillRpm = _drillRpm,
                 DrillThrough = _drillThrough,
                 DrillMaxExclusive = _drillMaxExclusive,
+                GuillotineFeed = _guillotineFeed,
+                GuillotinePlunge = _guillotinePlunge,
+                GuillotineThrough = _guillotineThrough,
             },
             Bridges = _profileBridges.Select(ProjectSessionCodec.FromBridge).ToList(),
             Ops = _opsOverlay.Select(ProjectSessionCodec.FromOp).ToList(),
@@ -2579,6 +2663,9 @@ public partial class MainWindow : Window
         _drillRpm = cam.DrillRpm;
         _drillThrough = cam.DrillThrough;
         _drillMaxExclusive = cam.DrillMaxExclusive;
+        _guillotineFeed = cam.GuillotineFeed;
+        _guillotinePlunge = cam.GuillotinePlunge;
+        _guillotineThrough = cam.GuillotineThrough;
         WriteCamToUi();
     }
 
@@ -2611,6 +2698,9 @@ public partial class MainWindow : Window
         DrillRpm.Text = CamBox(_drillRpm);
         DrillThrough.Text = CamBox(_drillThrough);
         DrillMaxExclusive.Text = CamBox(_drillMaxExclusive);
+        GuillotineFeed.Text = CamBox(_guillotineFeed);
+        GuillotinePlunge.Text = CamBox(_guillotinePlunge);
+        GuillotineThrough.Text = CamBox(_guillotineThrough);
         OpsHomeXyChk.IsChecked = _homeXyAtEnd;
         _syncingOpsStrategy = false;
         SyncStrategyCheckboxes();
@@ -4236,13 +4326,13 @@ public partial class MainWindow : Window
 
     void OnSaveNcClick(object sender, RoutedEventArgs e)
     {
+        if (!GuardExportPreflight()) return;
         var text = NcPreview.Text;
         if (string.IsNullOrWhiteSpace(text) || text.StartsWith("//"))
         {
             SetStatus("No NC to save — run Nest + NC first");
             return;
         }
-        if (!GuardExportPreflight()) return;
         var dlg = new SaveFileDialog
         {
             Filter = "NC (*.nc)|*.nc|G-code (*.ngc)|*.ngc|All|*.*",
@@ -5812,7 +5902,7 @@ public partial class MainWindow : Window
                         && NestDrag.IsCrossingSelect(_nestBoxX0, _nestBoxX1),
                     HighlightPass: _stage == "out" ? null : _opsFocus,
                     HighlightStrategy: _stage == "out" ? null : _opsStrategy,
-                    Bridges: _stage == "out" ? [] : _profileBridges));
+                    Bridges: _profileBridges));
             return;
         }
 

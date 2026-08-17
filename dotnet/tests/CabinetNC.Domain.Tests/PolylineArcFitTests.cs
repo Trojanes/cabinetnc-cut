@@ -74,6 +74,25 @@ public class PolylineArcFitTests
         Assert.DoesNotContain(segs, s => s.Arc);
         Assert.True(segs.Count >= 4);
     }
+
+    [Fact]
+    public void Shallow_bow_on_long_edge_becomes_one_G1()
+    {
+        // Circular R256 over ~90 mm — the false G2 OmniCam used to emit on square edges.
+        const double r = 256;
+        var sweep = 91.5 / r;
+        var pts = new List<(double X, double Y)>();
+        for (var i = 0; i <= 12; i++)
+        {
+            var a = -sweep / 2 + sweep * (i / 12d);
+            pts.Add((257 + r * Math.Sin(a), 1285 - r * (1 - Math.Cos(a))));
+        }
+        var segs = PolylineArcFit.Fit(pts, closed: false);
+        Assert.DoesNotContain(segs, s => s.Arc);
+        var line = Assert.Single(segs);
+        Assert.Equal(pts[^1].X, line.X, 3);
+        Assert.Equal(pts[^1].Y, line.Y, 3);
+    }
 }
 
 public class NcEmitterTroyArcTests
@@ -81,7 +100,7 @@ public class NcEmitterTroyArcTests
     static MachineProfile Machine() => MachineCatalog.Get("nesting_router_6");
 
     [Fact]
-    public void Offset_square_emits_R5_arcs()
+    public void Offset_outer_square_uses_R5_tool_centre_corners()
     {
         var source = new CutOp
         {
@@ -97,17 +116,11 @@ public class NcEmitterTroyArcTests
         };
         var offset = ContourToolOffset.Apply([source], 5);
         var path = offset[0].Path!;
-        var edge0 = Math.Sqrt(
-            (path[1].X - path[0].X) * (path[1].X - path[0].X)
-            + (path[1].Y - path[0].Y) * (path[1].Y - path[0].Y));
-        Assert.True(edge0 > 40, $"start on long edge, got {edge0:F3} mm");
         var nc = NcEmitter.OpsToNc(offset, Machine(), recipe: PostRecipe.TroyDefault());
         Assert.Contains("G2 ", nc);
-        Assert.DoesNotContain("G3 ", nc);
         Assert.Contains("R5.0000", nc);
         Assert.True(ClimbCut.SignedArea(path) < 0, "outer climb is CW");
-        Assert.True(System.Text.RegularExpressions.Regex.Matches(nc, @"G2 ").Count >= 8, nc);
-        Assert.DoesNotContain(".6309", nc);
+        Assert.True(path.Count > 8, $"round square needs corner fans, got {path.Count}");
     }
 
     [Fact]

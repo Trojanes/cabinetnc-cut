@@ -21,7 +21,8 @@ public static partial class NcEmitter
             o.PathSegments is { Count: > 0 } || o.Path is { Count: >= 2 })).ToList();
         var drills = list.Where(o => o.Op == "drill" && o.SheetX is not null).ToList();
         var grooves = list.Where(o => o.Op == "groove" && o.Path is { Count: >= 2 }).ToList();
-        var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves)).ToList();
+        var remnants = list.Where(o => o.Op == "remnant" && o.Path is { Count: >= 2 }).ToList();
+        var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves).Concat(remnants)).ToList();
 
         var w = new OsaiTroyWriter(recipe.HomeXyAtEnd);
         var rpm = recipe.ProfileFirstRpm > 0 ? recipe.ProfileFirstRpm : TroyRecipe.SpindleRpm;
@@ -65,6 +66,12 @@ public static partial class NcEmitter
                 w.ToolChange(ToolNum(c.ToolId), recipe.ProfileLastRpm > 0 ? recipe.ProfileLastRpm : rpm);
                 EmitTroyProfile(w, c, recipe, lastPass: true);
             }
+
+            foreach (var r in ordered.Where(o => o.Op == "remnant"))
+            {
+                w.ToolChange(ToolNum(r.ToolId), recipe.ProfileLastRpm > 0 ? recipe.ProfileLastRpm : rpm);
+                EmitTroyGuillotine(w, r, recipe);
+            }
         }
 
         w.EndProgram();
@@ -80,6 +87,8 @@ public static partial class NcEmitter
         foreach (var o in ops.Where(o => o.Op == "pocket" || (o.Op == "groove" && !o.IsTongue)))
             return ToolNum(o.ToolId);
         foreach (var o in ops.Where(o => o.Op == "contour"))
+            return ToolNum(o.ToolId);
+        foreach (var o in ops.Where(o => o.Op == "remnant"))
             return ToolNum(o.ToolId);
         return 2;
     }
@@ -104,8 +113,44 @@ public static partial class NcEmitter
     static void EmitTroyGroove(
         OsaiTroyWriter w, CutOp g, PostRecipe recipe, double feed, double feedZ)
     {
-        var path = g.Path!;
+        if (g.PocketTooSmallForTool)
+            return;
         var z = FeatureWorkZ(g, recipe);
+        var segments = g.PathSegments;
+        if (segments is { Count: > 0 } || g.FinishLoop is { Count: >= 3 })
+        {
+            (double X, double Y)? lastCutPoint = null;
+            if (segments is { Count: > 0 })
+            {
+                foreach (var seg in segments)
+                {
+                    if (seg.Count < 2) continue;
+                    if (lastCutPoint is not { } last || !SamePoint(last, seg[0]))
+                    {
+                        w.Rapid(null, null, recipe.SafeZMm);
+                        w.Rapid(seg[0].X, seg[0].Y, recipe.SafeZMm);
+                        w.Feed(null, null, z, feedZ);
+                    }
+                    EmitFittedXy(w, seg, feed, closed: false);
+                    lastCutPoint = seg[^1];
+                }
+            }
+            if (g.FinishLoop is { Count: >= 3 } finish)
+            {
+                if (lastCutPoint is not { } last || !SamePoint(last, finish[0]))
+                {
+                    w.Rapid(null, null, recipe.SafeZMm);
+                    w.Rapid(finish[0].X, finish[0].Y, recipe.SafeZMm);
+                    w.Feed(null, null, z, feedZ);
+                }
+                EmitFittedXy(w, finish, feed, closed: true);
+            }
+            w.Rapid(null, null, recipe.SafeZMm);
+            return;
+        }
+
+        if (g.Path is not { Count: >= 2 } path)
+            return;
         w.Rapid(path[0].X, path[0].Y, recipe.SafeZMm);
         w.Feed(null, null, z, feedZ);
         EmitFittedXy(w, path, feed, closed: false);
@@ -130,21 +175,41 @@ public static partial class NcEmitter
             return;
         }
 
+        (double X, double Y)? lastCutPoint = null;
         foreach (var seg in segments)
         {
             if (seg.Count < 2) continue;
-            w.Rapid(null, null, recipe.SafeZMm);
-            w.Rapid(seg[0].X, seg[0].Y, recipe.SafeZMm);
-            w.Feed(null, null, z, feedZ);
+            if (lastCutPoint is not { } last || !SamePoint(last, seg[0]))
+            {
+                w.Rapid(null, null, recipe.SafeZMm);
+                w.Rapid(seg[0].X, seg[0].Y, recipe.SafeZMm);
+                w.Feed(null, null, z, feedZ);
+            }
             EmitFittedXy(w, seg, feed, closed: false);
+            lastCutPoint = seg[^1];
         }
         if (c.FinishLoop is { Count: >= 3 } finish)
         {
-            w.Rapid(null, null, recipe.SafeZMm);
-            w.Rapid(finish[0].X, finish[0].Y, recipe.SafeZMm);
-            w.Feed(null, null, z, feedZ);
+            if (lastCutPoint is not { } last || !SamePoint(last, finish[0]))
+            {
+                w.Rapid(null, null, recipe.SafeZMm);
+                w.Rapid(finish[0].X, finish[0].Y, recipe.SafeZMm);
+                w.Feed(null, null, z, feedZ);
+            }
             EmitFittedXy(w, finish, feed, closed: true);
         }
+        w.Rapid(null, null, recipe.SafeZMm);
+    }
+
+    static void EmitTroyGuillotine(OsaiTroyWriter w, CutOp r, PostRecipe recipe)
+    {
+        var path = r.Path!;
+        var z = recipe.GuillotineThroughZMm;
+        var feed = recipe.GuillotineFeed > 0 ? recipe.GuillotineFeed : TroyRecipe.GuillotineFeedMmMin;
+        var feedZ = recipe.GuillotinePlunge > 0 ? recipe.GuillotinePlunge : TroyRecipe.GuillotinePlungeMmMin;
+        w.Rapid(path[0].X, path[0].Y, recipe.SafeZMm);
+        w.Feed(null, null, z, feedZ);
+        EmitFittedXy(w, path, feed, closed: false);
         w.Rapid(null, null, recipe.SafeZMm);
     }
 
@@ -163,16 +228,14 @@ public static partial class NcEmitter
         else
             w.Feed(null, null, cutZ, feedZ);
 
-        IEnumerable<ProfileBridge> bridges = [];
-        if (lastPass)
-        {
-            bridges = recipe.Bridges.Where(b =>
-                b.SheetIndex == c.SheetIndex
-                && string.Equals(b.PanelId, c.PanelId, StringComparison.Ordinal)
-                && string.Equals(b.FeatureId ?? "", c.FeatureId ?? "", StringComparison.Ordinal));
-        }
+        var bridges = recipe.Bridges.Where(b =>
+            b.SheetIndex == c.SheetIndex
+            && string.Equals(b.PanelId, c.PanelId, StringComparison.Ordinal)
+            && string.Equals(b.FeatureId ?? "", c.FeatureId ?? "", StringComparison.Ordinal));
+        var bridgeZ = Math.Max(cutZ, recipe.ProfileBridgeLeaveMm);
 
-        EmitPathFromArc(w, path, c.ClosePath, startArc, cutZ, safeZ, feed, feedZ, bridges);
+        EmitPathFromArc(
+            w, path, c.ClosePath, startArc, cutZ, bridgeZ, feed, feedZ, bridges);
         w.Rapid(null, null, safeZ);
     }
 
@@ -208,7 +271,7 @@ public static partial class NcEmitter
         bool closed,
         double startArc,
         double cutZ,
-        double safeZ,
+        double leaveZ,
         double feed,
         double feedZ,
         IEnumerable<ProfileBridge> bridges)
@@ -261,23 +324,24 @@ public static partial class NcEmitter
                 if (cutting)
                 {
                     FlushCut();
-                    w.Rapid(null, null, safeZ);
+                    var at0 = PtAt(a0);
+                    if (at0 is not null) run.Add(at0.Value);
+                    w.Feed(null, null, leaveZ, feedZ);
+                    cutting = false;
                 }
-                cutting = false;
-                w.Rapid(pt.Value.X, pt.Value.Y, null);
+                run.Add(pt.Value);
             }
             else
             {
                 if (!cutting)
                 {
+                    FlushCut();
                     w.Feed(null, null, cutZ, feedZ);
                     cutting = true;
-                    run.Add(pt.Value);
+                    var at0 = PtAt(a0);
+                    if (at0 is not null) run.Add(at0.Value);
                 }
-                else
-                {
-                    run.Add(pt.Value);
-                }
+                run.Add(pt.Value);
             }
         }
         FlushCut();
@@ -297,6 +361,9 @@ public static partial class NcEmitter
                 w.Feed(seg.X, seg.Y, null, feed);
         }
     }
+
+    static bool SamePoint((double X, double Y) a, (double X, double Y) b) =>
+        Math.Abs(a.X - b.X) < 1e-6 && Math.Abs(a.Y - b.Y) < 1e-6;
 
     static List<double> WalkSampleArcs(
         IReadOnlyList<(double X, double Y)> path,

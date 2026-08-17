@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Net.Http;
+using System.Text;
 using CabinetNC.Compute.Contracts;
 using Grpc.Net.Client;
 
@@ -11,6 +12,7 @@ public sealed class WorkerProcessHost : IAsyncDisposable
 {
     Process? _process;
     GrpcChannel? _channel;
+    readonly StringBuilder _stdLog = new();
 
     public string? LastError { get; private set; }
     public bool IsRunning => _process is { HasExited: false };
@@ -23,6 +25,7 @@ public sealed class WorkerProcessHost : IAsyncDisposable
         try
         {
             await StopAsync().ConfigureAwait(false);
+            _stdLog.Clear();
 
             var exe = ResolveWorkerExe();
             if (exe is null)
@@ -44,7 +47,19 @@ public sealed class WorkerProcessHost : IAsyncDisposable
                 },
                 EnableRaisingEvents = true,
             };
+            _process.OutputDataReceived += (_, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                    _stdLog.AppendLine(e.Data);
+            };
+            _process.ErrorDataReceived += (_, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                    _stdLog.AppendLine(e.Data);
+            };
             _process.Start();
+            _process.BeginOutputReadLine();
+            _process.BeginErrorReadLine();
 
             _channel = CreateChannel(WorkerPipes.Name);
 
@@ -68,6 +83,11 @@ public sealed class WorkerProcessHost : IAsyncDisposable
             }
 
             LastError = last?.Message ?? "Worker ping timeout";
+            if (_process is { HasExited: true })
+                LastError += $" (worker exited {_process.ExitCode})";
+            var log = _stdLog.ToString().Trim();
+            if (log.Length > 0)
+                LastError += " — " + (log.Length > 240 ? log[^240..] : log);
             return false;
         }
         catch (Exception ex)
