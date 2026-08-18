@@ -181,7 +181,8 @@ static class CanvasPainter
         CamStrategyKind? HighlightStrategy = null,
         TroyPassKind? HighlightPass = null,
         OpsToolpathKind? HighlightToolpath = null,
-        IReadOnlyList<ProfileBridge>? Bridges = null);
+        IReadOnlyList<ProfileBridge>? Bridges = null,
+        IReadOnlyDictionary<string, (double X, double Y)>? LabelOverrides = null);
 
     public static void PaintNest(
         SKCanvas canvas,
@@ -312,6 +313,16 @@ static class CanvasPainter
                 DrawDimHScreen(canvas, ToSx(aabb.MinX), ToSx(aabb.MaxX), ToSy(aabb.MinY) + 12, Fmt(aabb.MaxX - aabb.MinX));
                 DrawDimVScreen(canvas, ToSy(aabb.MinY), ToSy(aabb.MaxY), ToSx(aabb.MaxX) + 10, Fmt(aabb.MaxY - aabb.MinY));
             }
+
+            (double X, double Y)? ov = opts.LabelOverrides is { } map
+                && map.TryGetValue(panel.PanelId, out var o)
+                ? o
+                : null;
+            var anchor = LabelAnchorFinder.Find(panel, place.RotationDeg, ov);
+            var (lxSheet, lySheet) = NestTransform.ToSheet(
+                anchor.LocalX, anchor.LocalY, bounds,
+                place.OffsetX, place.OffsetY, place.RotationDeg);
+            DrawLabelMark(canvas, ToSx, ToSy, scale, lxSheet, lySheet, anchor);
         }
 
         if (opts.HoldPreviews is { Count: > 0 } previews)
@@ -1043,6 +1054,69 @@ static class CanvasPainter
             var (tx, ty) = GeomInteraction.ToScreen(view, (minX + maxX) * 0.5, (minY + maxY) * 0.5);
             DrawText(canvas, label, tx + 4, ty - 2, 10, stroke);
         }
+    }
+
+    static void DrawLabelMark(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        float scale,
+        double sheetX,
+        double sheetY,
+        LabelAnchor anchor)
+    {
+        var left = toSx(sheetX - anchor.WidthMm * 0.5);
+        var right = toSx(sheetX + anchor.WidthMm * 0.5);
+        var top = toSy(sheetY + anchor.HeightMm * 0.5);
+        var bottom = toSy(sheetY - anchor.HeightMm * 0.5);
+        if (right < left) (left, right) = (right, left);
+        if (bottom < top) (top, bottom) = (bottom, top);
+        var rect = new SKRect(left, top, right, bottom);
+        var fillC = new SKColor(0xFF, 0xF3, 0xC4, 0xE6);
+        var strokeC = new SKColor(0x8A, 0x6A, 0x00);
+        var radius = Math.Max(1.5f, 2.5f * Math.Max(0.4f, scale));
+        using (var fill = new SKPaint { Color = fillC, IsAntialias = true })
+            canvas.DrawRoundRect(rect, radius, radius, fill);
+        using (var stroke = new SKPaint
+        {
+            Color = strokeC,
+            IsStroke = true,
+            StrokeWidth = 1.2f,
+            IsAntialias = true,
+        })
+            canvas.DrawRoundRect(rect, radius, radius, stroke);
+
+        var fold = Math.Min(rect.Width, rect.Height) * 0.28f;
+        if (fold >= 3)
+        {
+            using var foldPath = new SKPath();
+            foldPath.MoveTo(rect.Right - fold, rect.Top);
+            foldPath.LineTo(rect.Right, rect.Top);
+            foldPath.LineTo(rect.Right, rect.Top + fold);
+            foldPath.Close();
+            using var foldFill = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0xB0), IsAntialias = true };
+            using var foldStroke = new SKPaint
+            {
+                Color = strokeC,
+                IsStroke = true,
+                StrokeWidth = 1,
+                IsAntialias = true,
+            };
+            canvas.DrawPath(foldPath, foldFill);
+            canvas.DrawPath(foldPath, foldStroke);
+        }
+
+        var cx = toSx(sheetX);
+        var cy = toSy(sheetY);
+        using var cross = new SKPaint
+        {
+            Color = strokeC,
+            IsStroke = true,
+            StrokeWidth = 1.1f,
+            IsAntialias = true,
+        };
+        canvas.DrawLine(cx - 3, cy, cx + 3, cy, cross);
+        canvas.DrawLine(cx, cy - 3, cx, cy + 3, cross);
     }
 
     static void DrawClosedFeatureOnSheet(

@@ -51,6 +51,32 @@ public static class NestTransform
         return (rx - minX + offsetX, ry - minY + offsetY);
     }
 
+    /// <summary>Inverse of <see cref="ToSheet"/> — sheet mm back to panel-local.</summary>
+    public static (double X, double Y) FromSheet(
+        double sheetX,
+        double sheetY,
+        LocalBounds bounds,
+        double offsetX,
+        double offsetY,
+        double rotationDeg)
+    {
+        var r = rotationDeg * Math.PI / 180.0;
+        var c = Math.Cos(r);
+        var s = Math.Sin(r);
+        var corners = new[]
+        {
+            Rotate(bounds.MinX, bounds.MinY, c, s),
+            Rotate(bounds.MaxX, bounds.MinY, c, s),
+            Rotate(bounds.MaxX, bounds.MaxY, c, s),
+            Rotate(bounds.MinX, bounds.MaxY, c, s),
+        };
+        var minX = corners.Min(p => p.X);
+        var minY = corners.Min(p => p.Y);
+        var rx = sheetX - offsetX + minX;
+        var ry = sheetY - offsetY + minY;
+        return (rx * c + ry * s, -rx * s + ry * c);
+    }
+
     /// <summary>Panel outline mapped into sheet space (same transform as nest painting).</summary>
     public static IReadOnlyList<Point2> SheetOutline(
         Panel panel, double offsetX, double offsetY, double rotationDeg)

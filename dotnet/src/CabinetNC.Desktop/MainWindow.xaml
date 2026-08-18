@@ -443,6 +443,9 @@
                   <TextBlock Text="机型" FontSize="11" Foreground="#555" />
                   <ComboBox x:Name="StockMachineCombo" DisplayMemberPath="Name" SelectedValuePath="Id"
                             Margin="0,0,0,4" SelectionChanged="OnStockMachineChanged" />
+                  <TextBlock Text="贴标机" FontSize="11" Foreground="#555" />
+                  <ComboBox x:Name="StockLabelerCombo" DisplayMemberPath="Name" SelectedValuePath="Id"
+                            Margin="0,0,0,4" SelectionChanged="OnStockLabelerChanged" />
                 </StackPanel>
                 <TextBlock x:Name="StockPaneEmpty" DockPanel.Dock="Top"
                            Text="载入方案后，这里会按板材种类列出参数框。"

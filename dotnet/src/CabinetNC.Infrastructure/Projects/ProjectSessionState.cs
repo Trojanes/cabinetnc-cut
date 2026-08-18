@@ -8,6 +8,7 @@ namespace CabinetNC.Infrastructure.Projects;
 public sealed class ProjectSessionState
 {
     public string Stage { get; set; } = "load";
+    public string LabelerMachineId { get; set; } = "osai_e4_1325";
     public int ActiveNestSheet { get; set; }
     public bool OpsAllSheets { get; set; } = true;
     public bool ShowNest { get; set; }
@@ -25,6 +26,14 @@ public sealed class ProjectSessionState
     public ProjectCamSettings Cam { get; set; } = new();
     public List<BridgeDto> Bridges { get; set; } = [];
     public List<CutOpDto> Ops { get; set; } = [];
+    public List<LabelAnchorDto> LabelAnchors { get; set; } = [];
+}
+
+public sealed class LabelAnchorDto
+{
+    public string PanelId { get; set; } = "";
+    public double LocalX { get; set; }
+    public double LocalY { get; set; }
 }
 
 public sealed class ProjectCamSettings

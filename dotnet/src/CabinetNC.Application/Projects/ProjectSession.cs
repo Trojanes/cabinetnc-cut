@@ -14,6 +14,7 @@ public sealed class ProjectSession
     public ManufacturingSnapshot? LastImportSnapshot { get; private set; }
     public string? ProjectDbPath { get; private set; }
     public string MachineId { get; set; } = "osai_e4_1325";
+    public string LabelerMachineId { get; set; } = "osai_e4_1325";
     public IReadOnlyList<ValidationIssue> LastWarnings { get; private set; } = [];
     public IReadOnlyList<ValidationIssue> LastErrors { get; private set; } = [];
 
@@ -149,5 +150,6 @@ public sealed class ProjectSession
         LastErrors = [];
         ManufacturingDirty = false;
         History.Clear();
+        LabelerMachineId = "osai_e4_1325";
     }
 }

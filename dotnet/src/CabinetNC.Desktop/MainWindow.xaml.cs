@@ -109,10 +109,11 @@ public partial class MainWindow : Window
     readonly DispatcherTimer _camTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     // drag state
-    string? _dragMode; // geom | nest | nestBox
+    string? _dragMode; // geom | nest | nestBox | label
     GeomInteraction.Hit? _geomHit;
     PanelPart? _geomStart;
     string? _nestDragPanelId;
+    readonly Dictionary<string, (double X, double Y)> _labelOverrides = new(StringComparer.Ordinal);
     double _nestStartMx, _nestStartMy, _nestOrigOx, _nestOrigOy;
     double _nestDragRotDeg;
     readonly HashSet<string> _nestSelected = new(StringComparer.Ordinal);
@@ -140,11 +141,13 @@ public partial class MainWindow : Window
         {
             MachineCombo.Items.Add(m);
             StockMachineCombo.Items.Add(m);
+            StockLabelerCombo.Items.Add(m);
             MachineComboModule.Items.Add(m);
             OpsMachineCombo.Items.Add(m);
         }
         MachineCombo.SelectedValue = MachineCatalog.DefaultId;
         StockMachineCombo.SelectedValue = MachineCatalog.DefaultId;
+        StockLabelerCombo.SelectedValue = MachineCatalog.DefaultId;
         MachineComboModule.SelectedValue = MachineCatalog.DefaultId;
         OpsMachineCombo.SelectedValue = MachineCatalog.DefaultId;
         BindOpsToolCombos();
@@ -201,6 +204,11 @@ public partial class MainWindow : Window
         ?? StockMachineCombo.SelectedValue as string
         ?? (MachineCombo.SelectedItem as MachineProfile)?.Id
         ?? (StockMachineCombo.SelectedItem as MachineProfile)?.Id
+        ?? MachineCatalog.DefaultId;
+
+    string SelectedLabelerMachineId() =>
+        StockLabelerCombo.SelectedValue as string
+        ?? (StockLabelerCombo.SelectedItem as MachineProfile)?.Id
         ?? MachineCatalog.DefaultId;
 
     void OnPreviewKeyDown(object sender, KeyEventArgs e)
@@ -493,6 +501,7 @@ public partial class MainWindow : Window
         public required string ToolId { get; init; }
         public required string NcText { get; init; }
         public required IReadOnlyList<CutOp> Ops { get; init; }
+        public IReadOnlyList<LabelPaste> Labels { get; init; } = [];
     }
 
     static int ExportToolRank(string? toolId) => (toolId ?? "").ToUpperInvariant() switch
@@ -541,6 +550,9 @@ public partial class MainWindow : Window
             var profile = ActiveProfileForCam();
             var recipe = CurrentPostRecipe();
             var jobId = _session.Package?.JobId ?? "job";
+            var labelPastes = _session.Package is { } pkg
+                ? LabelExport.Build(pkg.Panels, CurrentNestPlacements(), CurrentLabelOverrides())
+                : [];
             foreach (var sheetGroup in _opsOverlay
                          .Where(o => o.Placed && o.Enabled)
                          .GroupBy(o => o.SheetIndex)
@@ -556,21 +568,28 @@ public partial class MainWindow : Window
                 {
                     nc = "// " + ex.Message;
                 }
+                var sheetLabels = labelPastes.Where(p => p.SheetIndex == sheetGroup.Key).ToList();
+                if (sheetLabels.Count > 0 && !nc.StartsWith("//", StringComparison.Ordinal))
+                    nc = LabelExport.WrapCutWithLabelProcess(nc, LabelExport.EmitPro2(sheetLabels));
                 var tools = ops
                     .Select(o => o.ToolId)
                     .Where(t => !string.IsNullOrWhiteSpace(t))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(ExportToolRank)
                     .ToList();
+                var detail = ExportSheetDetail(ops);
+                if (sheetLabels.Count > 0)
+                    detail += $" · 贴标 {sheetLabels.Count}";
                 _exportFiles.Add(new ExportNcFile
                 {
                     FileName = $"{jobId}_S{sheetGroup.Key + 1}.anc",
                     Title = $"大板 {sheetGroup.Key + 1}",
-                    Detail = ExportSheetDetail(ops),
+                    Detail = detail,
                     SheetIndex = sheetGroup.Key,
                     ToolId = string.Join("+", tools),
                     NcText = nc,
                     Ops = ops,
+                    Labels = sheetLabels,
                 });
             }
         }
@@ -668,7 +687,10 @@ public partial class MainWindow : Window
             };
             if (dlg.ShowDialog() != true) return;
             File.WriteAllText(dlg.FileName, one.NcText);
-            SetStatus($"已导出 {one.FileName} → {dlg.FileName}");
+            var oneLabelDir = WriteLabelBmps(Path.GetDirectoryName(dlg.FileName)!, one.Labels);
+            SetStatus(oneLabelDir is null
+                ? $"已导出 {one.FileName} → {dlg.FileName}"
+                : $"已导出 {one.FileName} · 标签 {one.Labels.Count} 张在 {oneLabelDir}，请平铺拷到机床 D:\\Label");
             UsageLog.LogActionResult("export.nc.selected", new Dictionary<string, object?>
             {
                 ["ok"] = true,
@@ -684,7 +706,11 @@ public partial class MainWindow : Window
         var dir = folder.FolderName;
         foreach (var f in toWrite)
             File.WriteAllText(Path.Combine(dir, f.FileName), f.NcText);
-        SetStatus($"已导出 {toWrite.Count} 个文件 → {dir}");
+        var manyLabelDir = WriteLabelBmps(dir, toWrite.SelectMany(f => f.Labels));
+        var labelCount = manyLabelDir is null ? 0 : toWrite.Sum(f => f.Labels.Count);
+        SetStatus(labelCount == 0
+            ? $"已导出 {toWrite.Count} 个文件 → {dir}"
+            : $"已导出 {toWrite.Count} 个文件 · 标签 {labelCount} 张在 {manyLabelDir}，请平铺拷到机床 D:\\Label");
         UsageLog.LogActionResult("export.nc.files", new Dictionary<string, object?>
         {
             ["ok"] = true,
@@ -692,6 +718,18 @@ public partial class MainWindow : Window
             ["dir"] = dir,
             ["files"] = toWrite.Select(f => f.FileName).ToArray(),
         });
+    }
+
+    static string? WriteLabelBmps(string directory, IEnumerable<LabelPaste> pastes)
+    {
+        var list = pastes.ToList();
+        if (list.Count == 0 || string.IsNullOrWhiteSpace(directory))
+            return null;
+        var labelDir = Path.Combine(directory, "label");
+        Directory.CreateDirectory(labelDir);
+        foreach (var paste in list)
+            File.WriteAllBytes(Path.Combine(labelDir, paste.Stem + ".bmp"), LabelBmp.Render(paste));
+        return labelDir;
     }
 
     void ApplyExportFile(ExportNcFile? file)
@@ -2214,6 +2252,14 @@ public partial class MainWindow : Window
             RotationDeg = p.RotationDeg,
         }).ToList() ?? [];
 
+    IReadOnlyDictionary<string, (double X, double Y)>? CurrentLabelOverrides() =>
+        _labelOverrides.Count == 0 ? null : _labelOverrides;
+
+    LabelAnchor ResolveLabelAnchor(PanelPart panel, double rotationDeg) =>
+        _labelOverrides.TryGetValue(panel.PanelId, out var ov)
+            ? LabelAnchorFinder.Find(panel, rotationDeg, ov)
+            : LabelAnchorFinder.Find(panel, rotationDeg);
+
     void RefreshPreflightMeta()
     {
         if (_opsOverlay.Count == 0)
@@ -2441,6 +2487,7 @@ public partial class MainWindow : Window
         ResetProfileBridges();
         ExitBridgeModes();
         _locked.Clear();
+        _labelOverrides.Clear();
     }
 
     ProjectSessionState CaptureProjectSession()
@@ -2452,6 +2499,7 @@ public partial class MainWindow : Window
         return new ProjectSessionState
         {
             Stage = _stage,
+            LabelerMachineId = SelectedLabelerMachineId(),
             ActiveNestSheet = _activeNestSheet,
             OpsAllSheets = _opsAllSheets,
             ShowNest = _showNest,
@@ -2544,11 +2592,18 @@ public partial class MainWindow : Window
             },
             Bridges = _profileBridges.Select(ProjectSessionCodec.FromBridge).ToList(),
             Ops = _opsOverlay.Select(ProjectSessionCodec.FromOp).ToList(),
+            LabelAnchors = _labelOverrides.Select(kv => new LabelAnchorDto
+            {
+                PanelId = kv.Key,
+                LocalX = kv.Value.X,
+                LocalY = kv.Value.Y,
+            }).ToList(),
         };
     }
 
     void ApplyProjectSession(ProjectSessionState state)
     {
+        ApplyLabelerSelection(state.LabelerMachineId);
         ApplyCamSettings(state.Cam);
         if (!string.IsNullOrWhiteSpace(state.NestEnginePreference))
         {
@@ -2626,6 +2681,12 @@ public partial class MainWindow : Window
         _profileBridges.Clear();
         _profileBridges.AddRange(state.Bridges.Select(ProjectSessionCodec.ToBridge));
         _opsOverlay = state.Ops.Select(ProjectSessionCodec.ToOp).ToList();
+        _labelOverrides.Clear();
+        foreach (var a in state.LabelAnchors)
+        {
+            if (string.IsNullOrWhiteSpace(a.PanelId)) continue;
+            _labelOverrides[a.PanelId] = (a.LocalX, a.LocalY);
+        }
     }
 
     void ApplyCamSettings(ProjectCamSettings cam)
@@ -2892,6 +2953,19 @@ public partial class MainWindow : Window
 
     void OnStockMachineChanged(object sender, SelectionChangedEventArgs e) =>
         SyncMachineSelection(StockMachineCombo.SelectedValue as string);
+
+    void OnStockLabelerChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _session.LabelerMachineId = SelectedLabelerMachineId();
+    }
+
+    void ApplyLabelerSelection(string? id)
+    {
+        var resolved = string.IsNullOrWhiteSpace(id) ? MachineCatalog.DefaultId : id;
+        if (StockLabelerCombo.SelectedValue as string != resolved)
+            StockLabelerCombo.SelectedValue = resolved;
+        _session.LabelerMachineId = SelectedLabelerMachineId();
+    }
 
     void OnNestMachineChanged(object sender, SelectionChangedEventArgs e) =>
         SyncMachineSelection(MachineCombo.SelectedValue as string);
@@ -4034,6 +4108,7 @@ public partial class MainWindow : Window
         });
         _session.SetProjectDbPath(dlg.FileName);
         _session.MachineId = SelectedMachineId();
+        _session.LabelerMachineId = SelectedLabelerMachineId();
         SetStatus($"已保存工程 → {dlg.FileName}");
         UsageLog.LogActionResult("project.save", new Dictionary<string, object?>
         {
@@ -4341,7 +4416,12 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog() != true) return;
         File.WriteAllText(dlg.FileName, text);
-        SetStatus($"Saved NC → {dlg.FileName}");
+        var labelDir = _exportSelected is { Labels.Count: > 0 } sel
+            ? WriteLabelBmps(Path.GetDirectoryName(dlg.FileName)!, sel.Labels)
+            : null;
+        SetStatus(labelDir is null
+            ? $"Saved NC → {dlg.FileName}"
+            : $"Saved NC · 标签 {_exportSelected!.Labels.Count} 张在 {labelDir}，请平铺拷到机床 D:\\Label");
         UsageLog.LogActionResult("export.nc", new Dictionary<string, object?>
         {
             ["ok"] = true,
@@ -4577,6 +4657,34 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (_stage == "nest")
+            {
+                var labelId = HitTestLabel(x, y);
+                if (labelId is not null)
+                {
+                    var labelPanel = _session.Package.Panels.FirstOrDefault(p => p.PanelId == labelId);
+                    if (labelPanel is not null)
+                        PartList.SelectedItem = labelPanel;
+                    _nestSelected.Clear();
+                    _nestSelected.Add(labelId);
+                    SyncPartListFromNestSelection(labelId);
+                    _dragMode = "label";
+                    _nestDragFromHold = false;
+                    _nestDragPanelId = labelId;
+                    CanvasPane.CaptureMouse();
+                    var labelPlace = _nest.Placements.FirstOrDefault(p => p.PanelId == labelId);
+                    if (labelPanel is not null && labelPlace is not null)
+                    {
+                        var a = ResolveLabelAnchor(labelPanel, labelPlace.RotationDeg);
+                        SetStatus($"拖贴标 · {labelPanel.DisplayPartName} · {a.LocalX:0.#},{a.LocalY:0.#}");
+                    }
+                    else
+                        SetStatus($"拖贴标 · {labelId}");
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             var hitId = HitTestNest(x, y);
             if (hitId is null)
             {
@@ -4678,6 +4786,13 @@ public partial class MainWindow : Window
                 ? "交叉选择（碰到即选）"
                 : "窗口选择（全包围）");
             CanvasHost.InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
+        if (_dragMode == "label" && _nestDragPanelId is not null)
+        {
+            ApplyLabelDragFromScreen(x, y);
             e.Handled = true;
             return;
         }
@@ -4934,6 +5049,8 @@ public partial class MainWindow : Window
         if (_nestRightHandled || _stage != "nest") return;
         if (IsNestChromeClick(e.OriginalSource)) return;
         CanvasPixelPos(e);
+        if (_dragMode == "label")
+            return;
         if (_dragMode == "nest" && _nestDragPanelId is not null)
         {
             RotateNestDragClockwise90();
@@ -5228,6 +5345,11 @@ public partial class MainWindow : Window
         else if ((_stage is "nest") && _nest is { Ok: true })
         {
             EnsureNestViewMetrics();
+            if (HitTestLabel(x, y) is not null)
+            {
+                CanvasPane.Cursor = Cursors.SizeAll;
+                return;
+            }
             if (HitTestHolding(x, y) is not null)
             {
                 CanvasPane.Cursor = Cursors.SizeAll;
@@ -5288,6 +5410,10 @@ public partial class MainWindow : Window
         else if (_dragMode == "nestBox")
         {
             FinishNestBoxSelect();
+        }
+        else if (_dragMode == "label")
+        {
+            RefreshExportFiles();
         }
         else if (_dragMode == "nest" && _nestDragPanelId is not null && _nest is { Ok: true } && _session.Package is not null)
         {
@@ -5715,6 +5841,55 @@ public partial class MainWindow : Window
         _holdingBayLeft = bay > 0 ? w - bay : 0;
     }
 
+    string? HitTestLabel(float sx, float sy)
+    {
+        if (_nest is not { Ok: true } || _session.Package is null) return null;
+        EnsureNestViewMetrics();
+        if (_nestScale <= 0) return null;
+        var byId = _session.Package.Panels.ToDictionary(p => p.PanelId);
+        var (mx, my) = ScreenToSheet(sx, sy);
+        var minHalfW = 7.0 / _nestScale;
+        var minHalfH = 6.0 / _nestScale;
+        string? best = null;
+        var bestArea = double.MaxValue;
+        foreach (var place in _nest.Placements.Where(p => p.SheetIndex == _activeNestSheet))
+        {
+            if (!byId.TryGetValue(place.PanelId, out var panel)) continue;
+            var anchor = ResolveLabelAnchor(panel, place.RotationDeg);
+            var bounds = NestTransform.BoundsOf(panel);
+            var (cx, cy) = NestTransform.ToSheet(
+                anchor.LocalX, anchor.LocalY, bounds,
+                place.OffsetX, place.OffsetY, place.RotationDeg);
+            var halfW = Math.Max(anchor.WidthMm * 0.5, minHalfW);
+            var halfH = Math.Max(anchor.HeightMm * 0.5, minHalfH);
+            if (mx < cx - halfW || mx > cx + halfW || my < cy - halfH || my > cy + halfH)
+                continue;
+            var area = (halfW * 2) * (halfH * 2);
+            if (area >= bestArea) continue;
+            bestArea = area;
+            best = place.PanelId;
+        }
+        return best;
+    }
+
+    void ApplyLabelDragFromScreen(float x, float y)
+    {
+        if (_dragMode != "label" || _nestDragPanelId is null
+            || _nest is not { Ok: true } || _session.Package is null)
+            return;
+        var place = _nest.Placements.FirstOrDefault(p => p.PanelId == _nestDragPanelId);
+        var panel = _session.Package.Panels.FirstOrDefault(p => p.PanelId == _nestDragPanelId);
+        if (place is null || panel is null) return;
+        var (sx, sy) = ScreenToSheet(x, y);
+        var bounds = NestTransform.BoundsOf(panel);
+        var (lx, ly) = NestTransform.FromSheet(
+            sx, sy, bounds, place.OffsetX, place.OffsetY, place.RotationDeg);
+        var found = LabelAnchorFinder.Find(panel, place.RotationDeg, (lx, ly));
+        _labelOverrides[panel.PanelId] = (found.LocalX, found.LocalY);
+        SetStatus($"贴标落点 {found.LocalX:0.#},{found.LocalY:0.#}");
+        CanvasHost.InvalidateVisual();
+    }
+
     string? HitTestNest(float sx, float sy)
     {
         if (_nest is not { Ok: true } || _session.Package is null) return null;
@@ -5902,7 +6077,8 @@ public partial class MainWindow : Window
                         && NestDrag.IsCrossingSelect(_nestBoxX0, _nestBoxX1),
                     HighlightPass: _stage == "out" ? null : _opsFocus,
                     HighlightStrategy: _stage == "out" ? null : _opsStrategy,
-                    Bridges: _profileBridges));
+                    Bridges: _profileBridges,
+                    LabelOverrides: CurrentLabelOverrides()));
             return;
         }
 
