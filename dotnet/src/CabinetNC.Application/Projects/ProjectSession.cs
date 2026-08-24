@@ -1,6 +1,7 @@
 namespace CabinetNC.Application.Projects;
 
 using CabinetNC.Domain;
+using CabinetNC.Domain.Nesting;
 using CabinetNC.Domain.Parts;
 using CabinetNC.FusionPackage;
 
@@ -29,9 +30,9 @@ public sealed class ProjectSession
         LastErrors = result.Errors;
         if (result.Ok && result.Package is not null)
         {
-            Package = result.Package;
+            Package = StampIfNeeded(result.Package, path);
             // ponytail: project.db still stores flat cut-package JSON; woodjob zip stays on SourcePath.
-            PackageJson = CutPackageJson.Serialize(result.Package);
+            PackageJson = CutPackageJson.Serialize(Package);
             SourceSnapshotJson = result.SourceSnapshotJson;
             LastImportSnapshot = result.Snapshot ?? TryParseSnapshot(result.SourceSnapshotJson);
             SourcePath = path;
@@ -39,6 +40,32 @@ public sealed class ProjectSession
             ManufacturingDirty = false;
             History.Clear();
         }
+        return result;
+    }
+
+    public PackageImportResult AddPackageFile(string path)
+    {
+        var result = PackageImporter.FromPath(path);
+        LastWarnings = result.Warnings;
+        LastErrors = result.Errors;
+        if (!result.Ok || result.Package is null)
+            return result;
+        var incomingId = PackageMerge.SuggestId(result.Package, path);
+        var incomingLabel = PackageMerge.SuggestLabel(result.Package, path);
+        if (Package is null)
+        {
+            Package = PackageMerge.Stamp(result.Package, incomingId, incomingLabel);
+            SourcePath = path;
+        }
+        else
+        {
+            if (Package.Panels.All(p => string.IsNullOrWhiteSpace(p.Identity?.PackageId)))
+                Package = StampIfNeeded(Package, SourcePath);
+            Package = PackageMerge.Merge(Package, result.Package, incomingId, incomingLabel);
+        }
+        PackageJson = CutPackageJson.Serialize(Package);
+        ManufacturingDirty = true;
+        History.Clear();
         return result;
     }
 
@@ -52,8 +79,8 @@ public sealed class ProjectSession
         LastErrors = result.Errors;
         if (result.Ok && result.Package is not null)
         {
-            Package = result.Package;
-            PackageJson = json;
+            Package = StampIfNeeded(result.Package, sourceLabel);
+            PackageJson = CutPackageJson.Serialize(Package);
             SourceSnapshotJson = sourceSnapshotJson;
             LastImportSnapshot = TryParseSnapshot(sourceSnapshotJson);
             SourcePath = sourceLabel;
@@ -77,7 +104,31 @@ public sealed class ProjectSession
         }
     }
 
+    static CutPackage StampIfNeeded(CutPackage pkg, string? sourcePath)
+    {
+        if (pkg.Panels.Any(p => !string.IsNullOrWhiteSpace(p.Identity?.PackageId)))
+            return pkg;
+        return PackageMerge.Stamp(
+            pkg,
+            PackageMerge.SuggestId(pkg, sourcePath),
+            PackageMerge.SuggestLabel(pkg, sourcePath));
+    }
+
     public void SetProjectDbPath(string? path) => ProjectDbPath = path;
+
+    public void AcceptPackage(CutPackage package, string? sourcePath = null)
+    {
+        Package = StampIfNeeded(package, sourcePath);
+        PackageJson = CutPackageJson.Serialize(package);
+        SourceSnapshotJson = null;
+        LastImportSnapshot = null;
+        SourcePath = sourcePath;
+        ProjectDbPath = null;
+        LastWarnings = [];
+        LastErrors = [];
+        ManufacturingDirty = false;
+        History.Clear();
+    }
 
     public void ReplacePanel(Panel panel, bool recordHistory = true)
     {
@@ -87,6 +138,20 @@ public sealed class ProjectSession
         Package = Package.WithPanel(panel);
         PackageJson = CutPackageJson.Serialize(Package);
         ManufacturingDirty = true;
+    }
+
+    public bool TryMergeMaterialKinds(
+        IReadOnlyList<NestGroupKey> selected,
+        NestGroupKey target,
+        BlindFeatureDepthPolicy blindPolicy)
+    {
+        if (Package is null || selected.Count < 2)
+            return false;
+        History.PushBeforeEdit(PackageJson ?? CutPackageJson.Serialize(Package));
+        Package = MaterialCorrect.MergeKinds(Package, selected, target, blindPolicy);
+        PackageJson = CutPackageJson.Serialize(Package);
+        ManufacturingDirty = true;
+        return true;
     }
 
     public void RemovePanel(string panelId, bool recordHistory = true)

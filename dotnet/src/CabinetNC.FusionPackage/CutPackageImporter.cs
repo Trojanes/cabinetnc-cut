@@ -247,6 +247,8 @@ public static class CutPackageImporter
                     Faces = faces,
                     Identity = new WorkpieceIdentity
                     {
+                        PackageId = TryGetString(p, "packageId"),
+                        PackageLabel = TryGetString(p, "packageLabel"),
                         ProjectId = TryGetString(p, "projectId"),
                         ModuleId = TryGetString(p, "moduleId"),
                         WorkpieceId = TryGetString(p, "workpieceId") ?? panelId,

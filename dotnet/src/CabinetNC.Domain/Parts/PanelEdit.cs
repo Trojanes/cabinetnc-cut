@@ -383,6 +383,8 @@ public static class PanelEdit
             ? null
             : new WorkpieceIdentity
             {
+                PackageId = panel.Identity.PackageId,
+                PackageLabel = panel.Identity.PackageLabel,
                 ProjectId = panel.Identity.ProjectId,
                 ModuleId = panel.Identity.ModuleId,
                 WorkpieceId = newPanelId,

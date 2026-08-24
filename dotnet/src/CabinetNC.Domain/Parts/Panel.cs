@@ -52,6 +52,55 @@ public sealed class Panel
     public string? GrainDirection { get; init; }
     public required Outline Outline { get; init; }
     public IReadOnlyList<PanelFeature> Features { get; init; } = [];
+
+    public Panel WithQuantity(int quantity) =>
+        new()
+        {
+            PanelId = PanelId,
+            Name = Name,
+            Material = Material,
+            ThicknessMm = ThicknessMm,
+            DecorId = DecorId,
+            SubstrateId = SubstrateId,
+            ColorName = ColorName,
+            SurfaceMode = SurfaceMode,
+            Quantity = quantity,
+            AllowedRotations = AllowedRotations,
+            GrainDirection = GrainDirection,
+            Outline = Outline,
+            Features = Features,
+            Faces = Faces,
+            Identity = Identity,
+            Orientation = Orientation,
+            EdgeBanding = EdgeBanding,
+            Notes = Notes,
+            Side = Side,
+        };
+
+    public Panel WithTree(string panelId, WorkpieceIdentity identity) =>
+        new()
+        {
+            PanelId = panelId,
+            Name = Name,
+            Material = Material,
+            ThicknessMm = ThicknessMm,
+            DecorId = DecorId,
+            SubstrateId = SubstrateId,
+            ColorName = ColorName,
+            SurfaceMode = SurfaceMode,
+            Quantity = Quantity,
+            AllowedRotations = AllowedRotations,
+            GrainDirection = GrainDirection,
+            Outline = Outline,
+            Features = Features,
+            Faces = Faces,
+            Identity = identity,
+            Orientation = Orientation,
+            EdgeBanding = EdgeBanding,
+            Notes = Notes,
+            Side = Side,
+        };
+
     public IReadOnlyList<WorkpieceFace> Faces { get; init; } = [];
 
     /// <summary>Project/Module/Workpiece identity (optional; soft hierarchy).</summary>
@@ -91,6 +140,14 @@ public sealed class Panel
             return StripAtSuffix(raw).Replace(" - ", "-", StringComparison.Ordinal);
         }
     }
+
+    /// <summary>Left-rail package node — imported .cnjob / JobId.</summary>
+    public string DisplayPackage =>
+        FirstNonEmpty(Identity?.PackageLabel, Identity?.PackageId, Identity?.ProjectId, "方案");
+
+    /// <summary>Left-rail assembly node — Fusion module, else title group.</summary>
+    public string DisplayAssembly =>
+        FirstNonEmpty(Identity?.ModuleId, DisplayGroup);
 
     /// <summary>Group key before <c>.</c> or <c>-</c> (Fusion ``assembly-component``).</summary>
     public string DisplayGroup => SplitGroupPart(DisplayTitle).Group;
@@ -248,6 +305,15 @@ public sealed class Panel
         var parts = raw.Trim().Replace('-', '_').Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return string.Join(" ", parts.Select(p =>
             p.Length == 0 ? p : char.ToUpperInvariant(p[0]) + p[1..].ToLowerInvariant()));
+    }
+
+    static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v)) return v.Trim();
+        }
+        return "";
     }
 
     static string Fmt(double v) =>

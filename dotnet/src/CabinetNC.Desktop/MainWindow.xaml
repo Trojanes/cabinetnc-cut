@@ -21,6 +21,23 @@
       <Setter Property="Padding" Value="4,3" />
       <Setter Property="BorderBrush" Value="#AAAAAA" />
     </Style>
+    <Style x:Key="ColSplitter" TargetType="GridSplitter">
+      <Setter Property="Width" Value="6" />
+      <Setter Property="Background" Value="#C8C8C8" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="VerticalAlignment" Value="Stretch" />
+      <Setter Property="Cursor" Value="SizeWE" />
+      <Setter Property="ShowsPreview" Value="False" />
+      <Setter Property="Panel.ZIndex" Value="3" />
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="#1A3A5C" />
+        </Trigger>
+        <Trigger Property="IsDragging" Value="True">
+          <Setter Property="Background" Value="#1A3A5C" />
+        </Trigger>
+      </Style.Triggers>
+    </Style>
     <Style x:Key="RailH2" TargetType="TextBlock">
       <Setter Property="FontSize" Value="11" />
       <Setter Property="FontWeight" Value="SemiBold" />
@@ -114,6 +131,10 @@
         </StackPanel>
         <WrapPanel HorizontalAlignment="Right" VerticalAlignment="Center">
           <Button Content="打开方案…" Click="OnOpenClick" />
+          <Button Content="加入方案…" Click="OnAddPackageClick"
+                  ToolTip="再打开一份或多份 .cnjob，和当前板件并列密排" />
+          <Button Content="从 .anc 反推…" Click="OnImportAncClick"
+                  ToolTip="从机台 OSAI .anc / .nc 还原板件，供补板重切" />
           <Button Content="打开工程…" Click="OnOpenProjectClick" />
           <Button Content="保存工程" Click="OnSaveProjectClick" />
           <Button Content="使用日志" Click="OnOpenUsageLogsClick" ToolTip="打开 app_usage.jsonl / latest（问题排查）" />
@@ -228,13 +249,21 @@
 
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition x:Name="LeftCol" Width="200" />
-              <ColumnDefinition Width="*" />
+              <ColumnDefinition x:Name="LeftCol" Width="200" MinWidth="0" />
+              <ColumnDefinition Width="*" MinWidth="240" />
               <ColumnDefinition x:Name="NcCol" Width="300" />
             </Grid.ColumnDefinitions>
 
+            <GridSplitter x:Name="LeftSplitter" Grid.Column="0" Style="{StaticResource ColSplitter}" />
+
             <Border x:Name="LeftRail" Grid.Column="0" Background="#F7F7F7" BorderBrush="#C8C8C8" BorderThickness="0,0,1,0" Padding="8">
-              <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <DockPanel>
+                <Button x:Name="MergeKindsBtn" DockPanel.Dock="Bottom"
+                        Content="合并" Click="OnMergeKindsClick"
+                        Margin="0,10,0,0" Padding="10,6" HorizontalAlignment="Stretch"
+                        Visibility="Collapsed" IsEnabled="False"
+                        ToolTip="Ctrl 点选至少两个种类后，合并为其中一个材料" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel x:Name="LeftRailContent">
                   <TextBlock Text="工程" Style="{StaticResource RailH2}" Margin="0,0,0,4" />
                   <TextBlock x:Name="PackageMeta" Text="尚未加载" TextWrapping="Wrap" FontSize="12" Foreground="#888" Margin="0,0,0,8" />
@@ -248,8 +277,43 @@
                             <Setter Property="Template">
                               <Setter.Value>
                                 <ControlTemplate TargetType="{x:Type GroupItem}">
-                                  <Expander IsExpanded="True" Margin="0,4,0,2"
-                                            Foreground="#1A3A5C" FontSize="12" FontWeight="Bold">
+                                  <Expander IsExpanded="True" Margin="0,6,0,2"
+                                            Foreground="#12314F" FontSize="12" FontWeight="Bold">
+                                    <Expander.Header>
+                                      <DockPanel>
+                                        <CheckBox DockPanel.Dock="Left"
+                                                  Tag="StockKindPick"
+                                                  VerticalAlignment="Center"
+                                                  Margin="0,0,6,0"
+                                                  Focusable="False"
+                                                  Visibility="{Binding StockKindPickerVisible, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  PreviewMouseLeftButtonDown="OnStockKindPickDown" />
+                                        <TextBlock>
+                                          <TextBlock.Text>
+                                            <MultiBinding StringFormat="{}{0} ({1})">
+                                              <Binding Path="Name" Mode="OneWay" />
+                                              <Binding Path="ItemCount" Mode="OneWay" />
+                                            </MultiBinding>
+                                          </TextBlock.Text>
+                                        </TextBlock>
+                                      </DockPanel>
+                                    </Expander.Header>
+                                    <ItemsPresenter Margin="0,2,0,0" />
+                                  </Expander>
+                                </ControlTemplate>
+                              </Setter.Value>
+                            </Setter>
+                          </Style>
+                        </GroupStyle.ContainerStyle>
+                      </GroupStyle>
+                      <GroupStyle>
+                        <GroupStyle.ContainerStyle>
+                          <Style TargetType="{x:Type GroupItem}">
+                            <Setter Property="Template">
+                              <Setter.Value>
+                                <ControlTemplate TargetType="{x:Type GroupItem}">
+                                  <Expander IsExpanded="True" Margin="8,2,0,2"
+                                            Foreground="#3A5A7A" FontSize="11" FontWeight="SemiBold">
                                     <Expander.Header>
                                       <TextBlock>
                                         <TextBlock.Text>
@@ -260,7 +324,7 @@
                                         </TextBlock.Text>
                                       </TextBlock>
                                     </Expander.Header>
-                                    <ItemsPresenter Margin="0,2,0,0" />
+                                    <ItemsPresenter Margin="4,2,0,0" />
                                   </Expander>
                                 </ControlTemplate>
                               </Setter.Value>
@@ -293,6 +357,7 @@
                   <ListBox x:Name="WarnList" BorderThickness="0" Background="Transparent" FontSize="11" Foreground="#886644" />
                 </StackPanel>
               </ScrollViewer>
+              </DockPanel>
             </Border>
 
             <Border x:Name="OutGcodePane" Grid.Column="0" Background="#1E1E1E" BorderBrush="#C8C8C8"
@@ -359,10 +424,11 @@
                 <Border x:Name="EmptyState" Background="#FFFFFF" Visibility="Visible">
                   <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420">
                     <TextBlock Text="尚未载入方案" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" />
-                    <TextBlock Text="打开 Fusion 导出的 .cnjob（manufacturing-snapshot），再进入板材 / 密排 / 加工档。也支持 woodjob / cut-package。"
+                    <TextBlock Text="打开 Fusion 导出的 .cnjob（manufacturing-snapshot），再进入板材 / 密排 / 加工档。也支持 woodjob / cut-package，或从机台 .anc 反推补板。"
                                TextWrapping="Wrap" TextAlignment="Center" Foreground="#666" Margin="0,0,0,16" FontSize="12" />
                     <WrapPanel HorizontalAlignment="Center">
                       <Button x:Name="EmptyLoadBtn" Content="载入方案…" Click="OnOpenClick" Padding="14,8" Margin="0,0,8,0" />
+                      <Button x:Name="EmptyAncBtn" Content="从 .anc 反推…" Click="OnImportAncClick" Padding="14,8" Margin="0,0,8,0" />
                       <Button x:Name="EmptyDemoBtn" Content="打开示例" Click="OnLoadDemoClick" Padding="14,8" />
                     </WrapPanel>
                   </StackPanel>
@@ -894,9 +960,21 @@
           <DockPanel>
             <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
               <TextBlock Text="补板库" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4" />
-              <TextBlock Text="余料 / 补板登记。可从当前板材规格快速添加，或手工录入。"
+              <TextBlock Text="从机台 .anc 反推出板件后，勾选要重切的块（数量改为 1），再回生产加工密排导出。"
                          TextWrapping="Wrap" Foreground="#666" FontSize="12" />
               <TextBlock x:Name="RemnantsMeta" Margin="0,8,0,0" FontFamily="Consolas" FontSize="12" />
+              <TextBlock Text="重切板件" FontWeight="SemiBold" Margin="0,12,0,4" />
+              <ListBox x:Name="RecutPanelList" MinHeight="80" MaxHeight="180" FontSize="12" Margin="0,0,0,6">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <CheckBox Content="{Binding Label}" IsChecked="{Binding Selected, Mode=TwoWay}" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <WrapPanel Margin="0,0,0,12">
+                <Button Content="从 .anc 反推…" Click="OnImportAncClick" Margin="0,0,8,0" />
+                <Button Content="重切勾选的板" Click="OnRecutSelectedClick" />
+              </WrapPanel>
             </StackPanel>
             <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
               <TextBlock Text="登记补板" FontWeight="SemiBold" Margin="0,0,0,6" />

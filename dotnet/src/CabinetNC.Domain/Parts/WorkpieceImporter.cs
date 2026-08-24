@@ -43,6 +43,8 @@ public static class WorkpieceImporter
                 Faces = copy.Faces,
                 Identity = new WorkpieceIdentity
                 {
+                    PackageId = src.Identity?.PackageId,
+                    PackageLabel = src.Identity?.PackageLabel,
                     ProjectId = src.Identity?.ProjectId,
                     ModuleId = src.Identity?.ModuleId,
                     WorkpieceId = copy.PanelId,

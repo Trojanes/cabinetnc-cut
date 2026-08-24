@@ -46,6 +46,8 @@ public static class CutPackageJson
                 quantity = p.Quantity,
                 grainDirection = p.GrainDirection,
                 allowedRotations = p.AllowedRotations,
+                packageId = p.Identity?.PackageId,
+                packageLabel = p.Identity?.PackageLabel,
                 projectId = p.Identity?.ProjectId,
                 moduleId = p.Identity?.ModuleId,
                 workpieceId = p.Identity?.WorkpieceId ?? p.PanelId,

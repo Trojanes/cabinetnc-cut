@@ -36,14 +36,28 @@ public sealed class CutPackage
         return CloneWithPanels(list);
     }
 
-    CutPackage CloneWithPanels(IReadOnlyList<Panel> list) =>
+    public CutPackage WithPanels(IReadOnlyList<Panel> panels) =>
+        Clone(panels: panels);
+
+    public CutPackage WithSheets(IReadOnlyList<SheetStock> sheets) =>
+        Clone(sheets: sheets);
+
+    public CutPackage WithJobId(string? jobId) =>
+        Clone(jobId: jobId);
+
+    CutPackage CloneWithPanels(IReadOnlyList<Panel> list) => Clone(panels: list);
+
+    CutPackage Clone(
+        IReadOnlyList<Panel>? panels = null,
+        IReadOnlyList<SheetStock>? sheets = null,
+        string? jobId = null) =>
         new()
         {
             SchemaName = SchemaName,
             Version = Version,
-            JobId = JobId,
+            JobId = jobId ?? JobId,
             Units = Units,
-            Sheets = Sheets,
-            Panels = list,
+            Sheets = sheets ?? Sheets,
+            Panels = panels ?? Panels,
         };
 }

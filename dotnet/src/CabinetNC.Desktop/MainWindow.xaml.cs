@@ -33,6 +33,19 @@ namespace CabinetNC.Desktop;
 
 public partial class MainWindow : Window
 {
+    public static readonly DependencyProperty StockKindPickerVisibleProperty =
+        DependencyProperty.Register(
+            nameof(StockKindPickerVisible),
+            typeof(Visibility),
+            typeof(MainWindow),
+            new PropertyMetadata(Visibility.Collapsed));
+
+    public Visibility StockKindPickerVisible
+    {
+        get => (Visibility)GetValue(StockKindPickerVisibleProperty);
+        set => SetValue(StockKindPickerVisibleProperty, value);
+    }
+
     readonly ProjectSession _session = new();
     readonly WorkerProcessHost _worker = new();
     readonly SqliteProjectStore _store = new();
@@ -55,6 +68,11 @@ public partial class MainWindow : Window
     int _activeNestSheet;
     bool _showNest;
     string _stage = "load";
+    const double LeftRailMinW = 140;
+    const double LeftRailMaxW = 560;
+    const double LeftRailDefaultW = 200;
+    double _leftRailWidth = LeftRailDefaultW;
+    readonly HashSet<NestGroupKey> _pickedStockKinds = [];
     string _module = "production";
     bool _nestBusy;
     bool _stageChanging;
@@ -399,7 +417,15 @@ public partial class MainWindow : Window
         if (OutPreviewCaption is not null)
             OutPreviewCaption.Visibility = Visibility.Collapsed;
 
-        LeftRail.Visibility = _stage is "ops" or "out" ? Visibility.Collapsed : Visibility.Visible;
+        RememberLeftRailWidth();
+        var showLeftRail = _stage is not "ops" and not "out";
+        LeftRail.Visibility = showLeftRail ? Visibility.Visible : Visibility.Collapsed;
+        LeftSplitter.Visibility = _stage == "ops" ? Visibility.Collapsed : Visibility.Visible;
+        StockKindPickerVisible = _stage == "stock" ? Visibility.Visible : Visibility.Collapsed;
+        MergeKindsBtn.Visibility = _stage == "stock" ? Visibility.Visible : Visibility.Collapsed;
+        if (_stage != "stock")
+            _pickedStockKinds.Clear();
+        SyncStockKindChecks();
 
         Grid.SetColumn(GeomPane, 2);
         Grid.SetColumn(StockPane, 2);
@@ -414,6 +440,8 @@ public partial class MainWindow : Window
 
         if (_stage == "out")
         {
+            LeftCol.MinWidth = 180;
+            LeftCol.MaxWidth = 720;
             LeftCol.Width = new GridLength(1.4, GridUnitType.Star);
             NcCol.Width = new GridLength(280);
             NcPaneTitle.Text = "刀路文件";
@@ -421,17 +449,29 @@ public partial class MainWindow : Window
         }
         else if (_stage == "ops")
         {
+            LeftCol.MinWidth = 0;
+            LeftCol.MaxWidth = double.PositiveInfinity;
             LeftCol.Width = new GridLength(0);
             ApplyOpsChrome();
             RefreshOpsRail();
         }
         else
         {
-            LeftCol.Width = new GridLength(200);
+            LeftCol.MinWidth = LeftRailMinW;
+            LeftCol.MaxWidth = LeftRailMaxW;
+            LeftCol.Width = new GridLength(_leftRailWidth);
             NcCol.Width = new GridLength(300);
         }
 
         RefreshOneClickExport();
+    }
+
+    void RememberLeftRailWidth()
+    {
+        if (LeftRail.Visibility != Visibility.Visible) return;
+        var w = LeftCol.ActualWidth;
+        if (w >= LeftRailMinW && w <= LeftRailMaxW)
+            _leftRailWidth = w;
     }
 
     void UpdateStageChrome()
@@ -439,9 +479,9 @@ public partial class MainWindow : Window
         StageHint.Text = _stage switch
         {
             "load" => _session.Package is null
-                ? "载入方案: 打开 woodjob.zip / cut-package，或点「打开示例」"
-                : "载入方案: 检视板件 · 拖孔/槽/边 · 右侧可加特征",
-            "stock" => "板材与设备: 板宽/板长/边距/间距 · 选择机型",
+                ? "载入方案: 打开 woodjob / cut-package，或从机台 .anc 反推补板"
+                : "载入方案: 左栏 Package → Assembly → 板件 · 可用「加入方案」再并一单",
+            "stock" => "板材与设备: 相同板件已合并数量 · Ctrl 点选种类后可合并 · 按材料设大板",
             "nest" => "密排: 左右翻大板 · 拖摆位 · 锁定后重排保留",
             "ops" => "刀路: 选机器 · Profiling / Area Clearance / Drilling · 计算当前板或全部",
             "out" => "导出: 点右侧刀路文件，左边看 G-code，中间看该大板刀路",
@@ -963,6 +1003,36 @@ public partial class MainWindow : Window
                 $"{(r.UseInNest ? "[Nest]" : "[—]")} {r.Id} · {r.WidthMm:0.#}x{r.LengthMm:0.#}x{r.ThicknessMm:0.#} · {r.Material ?? "—"} · {r.Note ?? ""}");
         RemnantsMeta.Text =
             $"补板 {_library.Remnants.Count} · 参与密排 {_library.Remnants.Count(x => x.UseInNest)} · 库 {WorkshopLibraryStore.DefaultPath()}";
+        RefreshRecutPanelList();
+    }
+
+    void RefreshRecutPanelList()
+    {
+        if (RecutPanelList is null) return;
+        var keep = RecutPanelList.Items.OfType<RecutRow>().ToDictionary(r => r.PanelId, r => r.Selected);
+        var rows = new List<RecutRow>();
+        if (_session.Package is { Panels.Count: > 0 } pkg)
+        {
+            foreach (var p in pkg.Panels)
+            {
+                keep.TryGetValue(p.PanelId, out var on);
+                if (!keep.ContainsKey(p.PanelId)) on = true;
+                rows.Add(new RecutRow
+                {
+                    PanelId = p.PanelId,
+                    Label = $"{p.DisplayTitle}  {p.DisplayDetail}",
+                    Selected = on,
+                });
+            }
+        }
+        RecutPanelList.ItemsSource = rows;
+    }
+
+    sealed class RecutRow
+    {
+        public required string PanelId { get; init; }
+        public required string Label { get; init; }
+        public bool Selected { get; set; } = true;
     }
 
     void OnRemnantToggleNestClick(object sender, RoutedEventArgs e)
@@ -2866,9 +2936,13 @@ public partial class MainWindow : Window
         // Seed workshop materials from snapshot catalog when present (Fusion .cnjob).
         if (SyncMaterialsFromPackage(_session.Package, _session.LastImportSnapshot) > 0)
             PersistLibrary();
+        var pkgCount = _session.Package.Panels
+            .Select(p => p.DisplayPackage)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
         PackageMeta.Text =
             $"{_session.Package.SchemaName} v{_session.Package.Version}\n" +
-            $"job={_session.Package.JobId ?? "—"} · panels={_session.Package.Panels.Count} · sheets={_session.Package.Sheets.Count}";
+            $"packages={pkgCount} · job={_session.Package.JobId ?? "—"} · panels={_session.Package.Panels.Count} · sheets={_session.Package.Sheets.Count}";
         foreach (var w in _session.LastWarnings.Take(20))
             WarnList.Items.Add($"{w.Code}: {w.Message}");
         SyncNestSettingsFromPackage();
@@ -2933,7 +3007,7 @@ public partial class MainWindow : Window
                 MaterialId = group.Key.Material,
                 Label = sample.MaterialGroupLabel,
                 ThicknessMm = group.Key.ThicknessMm,
-                PanelCount = group.Count(),
+                PanelCount = group.Sum(p => Math.Max(1, p.Quantity)),
                 WidthMmText = width.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
                 LengthMmText = length.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
                 SpacingMmText = spacing.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
@@ -3278,7 +3352,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Bind panels: stock stage groups by material shop label; other stages by assembly DisplayGroup.
+    /// Bind panels: stock by material; else Package → Assembly → component.
     /// Nest/ops stay empty until initial nest succeeds.
     /// </summary>
     void BindPartList(string? selectId)
@@ -3294,20 +3368,149 @@ public partial class MainWindow : Window
 
         LeftRailContent.Visibility = Visibility.Visible;
         var panels = _session.Package.Panels.ToList();
-        var view = new ListCollectionView(panels);
-        var byMaterial = _stage == "stock";
-        var groupProp = byMaterial
-            ? nameof(PanelPart.MaterialGroupLabel)
-            : nameof(PanelPart.DisplayGroup);
-        view.GroupDescriptions.Add(new PropertyGroupDescription(groupProp));
-        view.SortDescriptions.Add(new SortDescription(groupProp, ListSortDirection.Ascending));
-        view.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayPartName), ListSortDirection.Ascending));
-        PartList.ItemsSource = view;
+        if (_stage == "stock")
+        {
+            var rows = PackageMerge.GroupIdenticalStock(panels)
+                .Select(g => new StockPartRow { Representative = g[0], Members = g })
+                .ToList();
+            var view = new ListCollectionView(rows);
+            view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(StockPartRow.MaterialGroupLabel)));
+            view.SortDescriptions.Add(new SortDescription(nameof(StockPartRow.MaterialGroupLabel), ListSortDirection.Ascending));
+            view.SortDescriptions.Add(new SortDescription(nameof(StockPartRow.DisplayPartName), ListSortDirection.Ascending));
+            PartList.ItemsSource = view;
+            var row = rows.FirstOrDefault(r => r.Members.Any(p => p.PanelId == selectId))
+                ?? rows.FirstOrDefault(r => r.Members.Any(p => p.PanelId == _selected?.PanelId))
+                ?? rows.FirstOrDefault();
+            _selected = row?.Representative;
+            PartList.SelectedItem = row;
+            Dispatcher.BeginInvoke(SyncStockKindChecks, DispatcherPriority.Loaded);
+            return;
+        }
+
+        var tree = new ListCollectionView(panels);
+        tree.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PanelPart.DisplayPackage)));
+        tree.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PanelPart.DisplayAssembly)));
+        tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayPackage), ListSortDirection.Ascending));
+        tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayAssembly), ListSortDirection.Ascending));
+        tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayPartName), ListSortDirection.Ascending));
+        PartList.ItemsSource = tree;
 
         _selected = panels.FirstOrDefault(p => p.PanelId == selectId)
             ?? panels.FirstOrDefault(p => p.PanelId == _selected?.PanelId)
             ?? panels.FirstOrDefault();
         PartList.SelectedItem = _selected;
+        Dispatcher.BeginInvoke(SyncStockKindChecks, DispatcherPriority.Loaded);
+    }
+
+    void OnStockKindPickDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_stage != "stock" || sender is not FrameworkElement fe)
+            return;
+        var group = fe.DataContext as CollectionViewGroup
+            ?? (fe.TemplatedParent as GroupItem)?.DataContext as CollectionViewGroup;
+        var key = KeyFromStockGroup(group);
+        if (key is null)
+            return;
+        e.Handled = true;
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0)
+        {
+            _pickedStockKinds.Clear();
+            _pickedStockKinds.Add(key.Value);
+        }
+        else if (!_pickedStockKinds.Add(key.Value))
+        {
+            _pickedStockKinds.Remove(key.Value);
+        }
+        SyncStockKindChecks();
+    }
+
+    NestGroupKey? KeyFromStockGroup(CollectionViewGroup? group)
+    {
+        if (group is null || _session.Package is null) return null;
+        var name = group.Name?.ToString();
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        foreach (var item in group.Items)
+        {
+            var panel = item as PanelPart ?? (item as StockPartRow)?.Representative;
+            if (panel is not null)
+                return NestGroupKey.From(panel.Material, panel.ThicknessMm);
+        }
+        var hit = _session.Package.Panels.FirstOrDefault(p => p.MaterialGroupLabel == name);
+        return hit is null ? null : NestGroupKey.From(hit.Material, hit.ThicknessMm);
+    }
+
+    void SyncStockKindChecks()
+    {
+        if (MergeKindsBtn is null || PartList is null) return;
+        foreach (var cb in FindVisualChildren<CheckBox>(PartList))
+        {
+            if (!Equals(cb.Tag, "StockKindPick")) continue;
+            var key = KeyFromStockGroup(cb.DataContext as CollectionViewGroup);
+            cb.IsChecked = key is not null && _pickedStockKinds.Contains(key.Value);
+        }
+        MergeKindsBtn.IsEnabled = _stage == "stock" && _pickedStockKinds.Count >= 2;
+    }
+
+    void OnMergeKindsClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null || _pickedStockKinds.Count < 2)
+        {
+            SetStatus("请先 Ctrl 点选至少两个种类");
+            return;
+        }
+
+        var options = _pickedStockKinds
+            .Select(key =>
+            {
+                var members = _session.Package.Panels.Where(p => MaterialCorrect.SameKind(p, key)).ToList();
+                var sample = members.FirstOrDefault();
+                return new MaterialKindOption
+                {
+                    Key = key,
+                    Label = sample?.MaterialGroupLabel ?? key.ToString(),
+                    PanelCount = members.Sum(p => Math.Max(1, p.Quantity)),
+                };
+            })
+            .OrderByDescending(o => o.PanelCount)
+            .ToList();
+
+        var selectedPanels = _session.Package.Panels
+            .Where(p => _pickedStockKinds.Contains(NestGroupKey.From(p.Material, p.ThicknessMm)))
+            .ToList();
+
+        var dlg = new MaterialMergeWindow(options, selectedPanels) { Owner = this };
+        if (dlg.ShowDialog() != true || dlg.ChosenKey is not { } target)
+            return;
+
+        if (!_session.TryMergeMaterialKinds(options.Select(o => o.Key).ToList(), target, dlg.BlindPolicy))
+        {
+            SetStatus("合并失败");
+            return;
+        }
+
+        _pickedStockKinds.Clear();
+        InvalidateManufacturingOutputs("材料合并");
+        RefreshStockMaterialCards();
+        BindPartList(_selected?.PanelId);
+        RefreshGeomRail();
+        var label = options.First(o => o.Key.Equals(target)).Label;
+        var count = _session.Package.Panels
+            .Where(p => MaterialCorrect.SameKind(p, target))
+            .Sum(p => Math.Max(1, p.Quantity));
+        SetStatus($"已合并为 {label} · {count} 件");
+    }
+
+    static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        var n = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < n; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+                yield return match;
+            foreach (var nested in FindVisualChildren<T>(child))
+                yield return nested;
+        }
     }
 
     void OnLockPlaceClick(object sender, RoutedEventArgs e)
@@ -3840,6 +4043,124 @@ public partial class MainWindow : Window
         UpdateStageChrome();
         SetStatus($"Opened {Path.GetFileName(dlg.FileName)} · panels={_session.Package!.Panels.Count} · {_session.Package.SchemaName}");
         ShowImportDialog(true, "载入方案", Path.GetFileName(dlg.FileName), result);
+        await RefreshWorkerAsync();
+    }
+
+    async void OnAddPackageClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter = "OmniCam job|*.cnjob;*.zip;*.json;manifest.json|Manufacturing snapshot (*.cnjob)|*.cnjob|WoodJob zip (*.zip)|*.zip|JSON package (*.json)|*.json|All|*.*",
+            Title = "加入方案（可多选，与当前板件并列密排）",
+            Multiselect = true,
+        };
+        if (dlg.ShowDialog() != true || dlg.FileNames.Length == 0) return;
+
+        var names = new List<string>();
+        PackageImportResult? last = null;
+        foreach (var path in dlg.FileNames)
+        {
+            last = _session.Package is null && names.Count == 0
+                ? _session.OpenPackageFile(path)
+                : _session.AddPackageFile(path);
+            if (!last.Ok)
+            {
+                SetStatus("加入失败: " + string.Join("; ", last.Errors.Select(x => $"{x.Path}: {x.Message}")));
+                ShowImportDialog(false, "加入方案", Path.GetFileName(path), last);
+                return;
+            }
+            names.Add(Path.GetFileName(path));
+        }
+
+        ClearManufacturingState();
+        _module = "production";
+        HighlightModule();
+        ApplyModuleVisibility();
+        BindPackage();
+        _stageChanging = true;
+        StageTabs.SelectedIndex = 0;
+        _stage = "load";
+        _stageChanging = false;
+        ApplyStageVisibility();
+        UpdateStageChrome();
+        SetStatus($"已加入 {names.Count} 份 · 共 {_session.Package!.Panels.Count} 块板 · {string.Join(", ", names)}");
+        ShowImportDialog(true, "加入方案", string.Join(", ", names), last);
+        await RefreshWorkerAsync();
+    }
+
+    async void OnImportAncClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter = "Troy OSAI (*.anc;*.nc)|*.anc;*.nc|All|*.*",
+            Title = "从机台 .anc / .nc 反推板件",
+        };
+        if (dlg.ShowDialog() != true) return;
+        string nc;
+        try
+        {
+            nc = File.ReadAllText(dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("无法读取: " + ex.Message);
+            MessageBox.Show(this, ex.Message, "从 .anc 反推", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var result = NcReverse.FromText(nc);
+        if (result.Panels.Count == 0)
+        {
+            var why = result.Warnings.Count > 0 ? string.Join(", ", result.Warnings) : "没有认出闭合外形";
+            SetStatus("反推失败: " + why);
+            MessageBox.Show(this, "没有还原出板件。\n" + why, "从 .anc 反推", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var jobId = Path.GetFileNameWithoutExtension(dlg.FileName);
+        _session.AcceptPackage(NcReverse.ToPackage(result, jobId), dlg.FileName);
+        ClearManufacturingState();
+        _module = "remnants";
+        HighlightModule();
+        ApplyModuleVisibility();
+        BindPackage();
+        RefreshRecutPanelList();
+        SetStatus($"从 {Path.GetFileName(dlg.FileName)} 反推 {result.Panels.Count} 块板 · 勾选后点「重切勾选的板」");
+        await RefreshWorkerAsync();
+    }
+
+    async void OnRecutSelectedClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null)
+        {
+            SetStatus("请先载入方案或从 .anc 反推");
+            return;
+        }
+        var picked = RecutPanelList.Items.OfType<RecutRow>().Where(r => r.Selected).Select(r => r.PanelId).ToHashSet(StringComparer.Ordinal);
+        if (picked.Count == 0)
+        {
+            SetStatus("请至少勾选一块要重切的板");
+            return;
+        }
+
+        var panels = _session.Package.Panels
+            .Where(p => picked.Contains(p.PanelId))
+            .Select(p => p.WithQuantity(1))
+            .ToList();
+        var pkg = _session.Package.WithPanels(panels);
+        _session.AcceptPackage(pkg, _session.SourcePath);
+        ClearManufacturingState();
+        _module = "production";
+        HighlightModule();
+        ApplyModuleVisibility();
+        BindPackage();
+        _stageChanging = true;
+        StageTabs.SelectedIndex = 1;
+        _stage = "stock";
+        _stageChanging = false;
+        ApplyStageVisibility();
+        UpdateStageChrome();
+        SetStatus($"补板 {panels.Count} 块 · 数量均为 1 · 确认板材后密排导出");
         await RefreshWorkerAsync();
     }
 
@@ -4503,7 +4824,8 @@ public partial class MainWindow : Window
 
     void OnPartSelected(object sender, SelectionChangedEventArgs e)
     {
-        _selected = PartList.SelectedItem as PanelPart;
+        _selected = PartList.SelectedItem as PanelPart
+            ?? (PartList.SelectedItem as StockPartRow)?.Representative;
         if (!_syncingNestSelection)
         {
             _nestSelected.Clear();

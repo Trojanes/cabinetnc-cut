@@ -1,10 +1,14 @@
 namespace CabinetNC.Domain.Parts;
 
 /// <summary>
-/// Manufacturing identity for a flat runtime panel (maps Project/Module/Workpiece without forcing UI tree yet).
+/// Manufacturing identity: Package (cnjob) → Assembly (module) → Component (workpiece).
 /// </summary>
 public sealed class WorkpieceIdentity
 {
+    /// <summary>Imported .cnjob / job key for the left-rail package node.</summary>
+    public string? PackageId { get; init; }
+    /// <summary>Shop label for that package (filename / JobId).</summary>
+    public string? PackageLabel { get; init; }
     public string? ProjectId { get; init; }
     public string? ModuleId { get; init; }
     public string? WorkpieceId { get; init; }
