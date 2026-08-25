@@ -73,6 +73,7 @@ public partial class MainWindow : Window
     const double LeftRailDefaultW = 200;
     double _leftRailWidth = LeftRailDefaultW;
     readonly HashSet<NestGroupKey> _pickedStockKinds = [];
+    bool _syncingProjectName;
     string _module = "production";
     bool _nestBusy;
     bool _stageChanging;
@@ -202,6 +203,7 @@ public partial class MainWindow : Window
             UpdateStageChrome();
             RefreshWorkflowDots();
             RefreshEmptyState();
+            SyncProjectNameBox();
             SetStatus("生产加工 · 先载入方案");
         };
         Closed += async (_, _) =>
@@ -589,9 +591,10 @@ public partial class MainWindow : Window
         {
             var profile = ActiveProfileForCam();
             var recipe = CurrentPostRecipe();
-            var jobId = _session.Package?.JobId ?? "job";
+            var project = _session.ResolvedProjectName;
+            var kindOrdinal = new Dictionary<NestGroupKey, int>();
             var labelPastes = _session.Package is { } pkg
-                ? LabelExport.Build(pkg.Panels, CurrentNestPlacements(), CurrentLabelOverrides())
+                ? LabelExport.Build(pkg.Panels, CurrentNestPlacements(), CurrentLabelOverrides(), KindDisplayName)
                 : [];
             foreach (var sheetGroup in _opsOverlay
                          .Where(o => o.Placed && o.Enabled)
@@ -620,10 +623,18 @@ public partial class MainWindow : Window
                 var detail = ExportSheetDetail(ops);
                 if (sheetLabels.Count > 0)
                     detail += $" · 贴标 {sheetLabels.Count}";
+                var panel = PanelOnSheet(sheetGroup.Key, sheetGroup.Select(o => o.PanelId));
+                var key = panel is null
+                    ? NestGroupKey.From(null, sheetGroup.Key)
+                    : NestGroupKey.From(panel.Material, panel.ThicknessMm);
+                kindOrdinal.TryGetValue(key, out var n);
+                n++;
+                kindOrdinal[key] = n;
+                var kindLabel = panel is null ? $"大板{sheetGroup.Key + 1}" : KindDisplayName(panel);
                 _exportFiles.Add(new ExportNcFile
                 {
-                    FileName = $"{jobId}_S{sheetGroup.Key + 1}.anc",
-                    Title = $"大板 {sheetGroup.Key + 1}",
+                    FileName = ExportNaming.AncFileName(project, kindLabel, n),
+                    Title = $"{project} · {kindLabel} · 第 {n} 张",
                     Detail = detail,
                     SheetIndex = sheetGroup.Key,
                     ToolId = string.Join("+", tools),
@@ -2500,7 +2511,7 @@ public partial class MainWindow : Window
                 var sheetIdx = ids.Where(id => sheetByPanel.ContainsKey(id)).Select(id => sheetByPanel[id]).Distinct().Count();
                 var sample = g.First();
                 NestGroupReportList.Items.Add(
-                    $"{sample.MaterialGroupLabel} · {placedCount}/{ids.Count} 件 · {sheetIdx} 张板");
+                    $"{KindDisplayName(sample)} · {placedCount}/{ids.Count} 件 · {sheetIdx} 张板");
             }
         }
 
@@ -2693,6 +2704,7 @@ public partial class MainWindow : Window
             _stockKinds.Add(new StockMaterialKindVm
             {
                 MaterialId = k.MaterialId,
+                AutoLabel = KindAutoLabel(k.MaterialId, k.ThicknessMm) ?? k.Label,
                 Label = string.IsNullOrWhiteSpace(k.Label) ? k.MaterialId : k.Label,
                 ThicknessMm = k.ThicknessMm,
                 PanelCount = 0,
@@ -2927,6 +2939,7 @@ public partial class MainWindow : Window
         {
             BindPartList(null);
             PackageMeta.Text = "尚未加载";
+            SyncProjectNameBox();
             RefreshEmptyState();
             ApplyStageVisibility();
             RefreshWorkflowDots();
@@ -2942,7 +2955,8 @@ public partial class MainWindow : Window
             .Count();
         PackageMeta.Text =
             $"{_session.Package.SchemaName} v{_session.Package.Version}\n" +
-            $"packages={pkgCount} · job={_session.Package.JobId ?? "—"} · panels={_session.Package.Panels.Count} · sheets={_session.Package.Sheets.Count}";
+            $"工程={_session.ResolvedProjectName} · packages={pkgCount} · panels={_session.Package.Panels.Count} · sheets={_session.Package.Sheets.Count}";
+        SyncProjectNameBox();
         foreach (var w in _session.LastWarnings.Take(20))
             WarnList.Items.Add($"{w.Code}: {w.Message}");
         SyncNestSettingsFromPackage();
@@ -3005,7 +3019,8 @@ public partial class MainWindow : Window
             _stockKinds.Add(new StockMaterialKindVm
             {
                 MaterialId = group.Key.Material,
-                Label = sample.MaterialGroupLabel,
+                AutoLabel = sample.MaterialGroupLabel,
+                Label = !string.IsNullOrWhiteSpace(prior?.Label) ? prior.Label : sample.MaterialGroupLabel,
                 ThicknessMm = group.Key.ThicknessMm,
                 PanelCount = group.Sum(p => Math.Max(1, p.Quantity)),
                 WidthMmText = width.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
@@ -3371,7 +3386,12 @@ public partial class MainWindow : Window
         if (_stage == "stock")
         {
             var rows = PackageMerge.GroupIdenticalStock(panels)
-                .Select(g => new StockPartRow { Representative = g[0], Members = g })
+                .Select(g => new StockPartRow
+                {
+                    Representative = g[0],
+                    Members = g,
+                    MaterialGroupLabel = KindDisplayName(g[0]),
+                })
                 .ToList();
             var view = new ListCollectionView(rows);
             view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(StockPartRow.MaterialGroupLabel)));
@@ -3400,6 +3420,99 @@ public partial class MainWindow : Window
             ?? panels.FirstOrDefault();
         PartList.SelectedItem = _selected;
         Dispatcher.BeginInvoke(SyncStockKindChecks, DispatcherPriority.Loaded);
+    }
+
+    void OnStockKindNameDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_stage != "stock" || e.ClickCount < 2 || sender is not TextBlock name)
+            return;
+        e.Handled = true;
+        var edit = FindTaggedSibling<TextBox>(name, "KindRename");
+        if (edit is null) return;
+        var group = name.DataContext as CollectionViewGroup;
+        edit.Text = group?.Name?.ToString() ?? name.Text;
+        name.Visibility = Visibility.Collapsed;
+        edit.Visibility = Visibility.Visible;
+        Dispatcher.BeginInvoke(() =>
+        {
+            edit.Focus();
+            edit.SelectAll();
+        }, DispatcherPriority.Input);
+    }
+
+    void OnStockKindRenameBoxDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    void OnStockKindRenameLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox edit)
+            CommitKindRename(edit);
+    }
+
+    void OnStockKindRenameKey(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox edit) return;
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            CommitKindRename(edit);
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            HideKindRename(edit);
+        }
+    }
+
+    void CommitKindRename(TextBox edit)
+    {
+        if (edit.Visibility != Visibility.Visible) return;
+        var group = edit.DataContext as CollectionViewGroup
+            ?? (edit.TemplatedParent as GroupItem)?.DataContext as CollectionViewGroup;
+        var key = KeyFromStockGroup(group);
+        var typed = (edit.Text ?? "").Trim();
+        HideKindRename(edit);
+        if (key is null) return;
+        var vm = _stockKinds.FirstOrDefault(k =>
+            NestGroupKey.From(k.MaterialId, k.ThicknessMm).Equals(key.Value));
+        if (vm is null) return;
+        vm.Label = string.IsNullOrWhiteSpace(typed) ? vm.AutoLabel : typed;
+        ApplyKindRenameSideEffects();
+    }
+
+    void HideKindRename(TextBox edit)
+    {
+        edit.Visibility = Visibility.Collapsed;
+        var name = FindTaggedSibling<TextBlock>(edit, "KindName");
+        if (name is not null)
+            name.Visibility = Visibility.Visible;
+    }
+
+    static T? FindTaggedSibling<T>(FrameworkElement start, object tag) where T : FrameworkElement
+    {
+        var root = start.Parent as DependencyObject ?? start;
+        foreach (var fe in FindVisualChildren<T>(root))
+        {
+            if (Equals(fe.Tag, tag)) return fe;
+        }
+        if (start.Parent is DependencyObject parent)
+        {
+            foreach (var fe in FindVisualChildren<T>(parent))
+            {
+                if (Equals(fe.Tag, tag)) return fe;
+            }
+        }
+        return null;
+    }
+
+    void ApplyKindRenameSideEffects()
+    {
+        if (_stage == "stock" && _session.Package is not null)
+            BindPartList(_selected?.PanelId);
+        if (NestReportMeta is not null)
+            RefreshNestReport();
+        if (_stage == "out")
+            RefreshExportFiles();
+        CanvasHost.InvalidateVisual();
     }
 
     void OnStockKindPickDown(object sender, MouseButtonEventArgs e)
@@ -3467,7 +3580,7 @@ public partial class MainWindow : Window
                 return new MaterialKindOption
                 {
                     Key = key,
-                    Label = sample?.MaterialGroupLabel ?? key.ToString(),
+                    Label = sample is null ? key.ToString() : KindDisplayName(sample),
                     PanelCount = members.Sum(p => Math.Max(1, p.Quantity)),
                 };
             })
@@ -4194,6 +4307,9 @@ public partial class MainWindow : Window
         ClearManufacturingState();
         _session.MachineId = doc.MachineId;
         _session.SetProjectDbPath(dlg.FileName);
+        _session.ProjectName = string.IsNullOrWhiteSpace(doc.Name) ? null : doc.Name;
+        if (string.IsNullOrWhiteSpace(_session.ProjectName))
+            _session.SuggestProjectName(_session.Package?.JobId, dlg.FileName);
         SyncMachineSelection(doc.MachineId);
 
         var session = ProjectSessionCodec.Deserialize(doc.SessionJson);
@@ -4386,11 +4502,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var defaultName = !string.IsNullOrEmpty(_session.ProjectDbPath)
-            ? Path.GetFileName(_session.ProjectDbPath)
-            : !string.IsNullOrWhiteSpace(_session.Package.JobId)
-                ? _session.Package.JobId + ".db"
-                : "project.db";
+        var defaultName = ExportNaming.FileStem(_session.ResolvedProjectName) + ".db";
         var dlg = new SaveFileDialog
         {
             Filter = "OmniCam project|project.db;*.db|SQLite|*.db",
@@ -4413,7 +4525,11 @@ public partial class MainWindow : Window
             : null;
 
         var session = CaptureProjectSession();
-        var name = Path.GetFileNameWithoutExtension(dlg.FileName);
+        var name = string.IsNullOrWhiteSpace(_session.ProjectName)
+            ? Path.GetFileNameWithoutExtension(dlg.FileName)
+            : _session.ResolvedProjectName;
+        _session.ProjectName = name;
+        SyncProjectNameBox();
         _store.Save(dlg.FileName, new ProjectDocument
         {
             Name = name,
@@ -6302,7 +6418,7 @@ public partial class MainWindow : Window
                     var title = p?.DisplayPartName ?? h.PanelId;
                     var detail = $"{h.WidthMm:0.#}×{h.HeightMm:0.#}";
                     var key = NestGroupKey.From(h.Material, h.ThicknessMm);
-                    var groupLabel = p?.MaterialGroupLabel ?? key.ToString();
+                    var groupLabel = p is null ? key.ToString() : KindDisplayName(p);
                     IReadOnlyList<(double X, double Y)> outline = p?.Outline.Points is { Count: >= 2 } pts
                         ? NestTransform.RotatedOutline(
                             pts.Select(pt => (pt.X, pt.Y)).ToList(),
@@ -6408,4 +6524,78 @@ public partial class MainWindow : Window
     }
 
     void SetStatus(string text) => StatusText.Text = text;
+
+    string KindDisplayName(PanelPart panel)
+    {
+        var key = NestGroupKey.From(panel.Material, panel.ThicknessMm);
+        var hit = _stockKinds.FirstOrDefault(k =>
+            NestGroupKey.From(k.MaterialId, k.ThicknessMm).Equals(key));
+        return hit is not null && !string.IsNullOrWhiteSpace(hit.Label)
+            ? hit.Label.Trim()
+            : panel.MaterialGroupLabel;
+    }
+
+    string? KindAutoLabel(string materialId, double thicknessMm)
+    {
+        var key = NestGroupKey.From(materialId, thicknessMm);
+        return _session.Package?.Panels
+            .FirstOrDefault(p => NestGroupKey.From(p.Material, p.ThicknessMm).Equals(key))
+            ?.MaterialGroupLabel;
+    }
+
+    void OnStockKindLabelChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: StockMaterialKindVm kind }
+            && string.IsNullOrWhiteSpace(kind.Label)
+            && !string.IsNullOrWhiteSpace(kind.AutoLabel))
+            kind.Label = kind.AutoLabel;
+        ApplyKindRenameSideEffects();
+    }
+
+    void OnProjectNameChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncingProjectName || ProjectNameBox is null) return;
+        _session.ProjectName = string.IsNullOrWhiteSpace(ProjectNameBox.Text)
+            ? null
+            : ProjectNameBox.Text.Trim();
+        ApplyProjectNameChrome();
+        if (_stage == "out")
+            RefreshExportFiles();
+    }
+
+    void SyncProjectNameBox()
+    {
+        if (ProjectNameBox is null) return;
+        _syncingProjectName = true;
+        ProjectNameBox.Text = _session.ProjectName ?? "";
+        _syncingProjectName = false;
+        ApplyProjectNameChrome();
+    }
+
+    void ApplyProjectNameChrome()
+    {
+        var empty = string.IsNullOrWhiteSpace(_session.ProjectName) && _session.Package is null;
+        var name = _session.ResolvedProjectName;
+        Title = empty ? "OmniCam" : "OmniCam — " + name;
+        if (ProjectNameBadge is not null)
+            ProjectNameBadge.Text = empty ? "" : name;
+    }
+
+    PanelPart? PanelOnSheet(int sheetIndex, IEnumerable<string?> opPanelIds)
+    {
+        if (_session.Package is null) return null;
+        foreach (var id in opPanelIds)
+        {
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            var hit = _session.Package.Panels.FirstOrDefault(p => p.PanelId == id);
+            if (hit is not null) return hit;
+        }
+        if (_nest is { Ok: true })
+        {
+            var pid = _nest.Placements.FirstOrDefault(p => p.SheetIndex == sheetIndex)?.PanelId;
+            if (!string.IsNullOrWhiteSpace(pid))
+                return _session.Package.Panels.FirstOrDefault(p => p.PanelId == pid);
+        }
+        return null;
+    }
 }
