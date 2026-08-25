@@ -17,8 +17,21 @@ public sealed class StockMaterialKindVm : INotifyPropertyChanged
     string _leftoverXMmText = "";
     string _leftoverYMmText = "";
 
+    string _label = "";
+
     public required string MaterialId { get; init; }
-    public required string Label { get; init; }
+    public string AutoLabel { get; init; } = "";
+    public string Label
+    {
+        get => _label;
+        set
+        {
+            var next = value ?? "";
+            if (_label == next) return;
+            _label = next;
+            OnPropertyChanged();
+        }
+    }
     public double ThicknessMm { get; init; }
     public int PanelCount { get; init; }
 
