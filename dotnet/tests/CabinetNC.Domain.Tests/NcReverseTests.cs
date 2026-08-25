@@ -51,6 +51,20 @@ public class NcReverseTests
         Path = [(0, 0), (200, 0), (200, 100), (0, 100)],
     };
 
+    static CutOp InnerCutout() => new()
+    {
+        Op = "contour",
+        PanelId = "P1",
+        FeatureId = "CUT-1",
+        ToolId = "T2",
+        Placed = true,
+        ClosePath = true,
+        Through = true,
+        ThicknessMm = 18,
+        DepthMm = 18.5,
+        Path = [(40, 20), (80, 20), (80, 70), (40, 70)],
+    };
+
     static string EmitOffset(params CutOp[] ops)
     {
         var offset = ContourToolOffset.Apply(ops, 5);
@@ -122,6 +136,22 @@ public class NcReverseTests
         var hole = panel.Features.First(f => f.Kind.Contains("hole", StringComparison.OrdinalIgnoreCase));
         Assert.InRange(hole.X, 25, 35);
         Assert.InRange(hole.Y, 35, 45);
+    }
+
+    [Fact]
+    public void Reverse_recovers_inner_cutout_not_cutter_center()
+    {
+        var nc = EmitOffset(Outer(), InnerCutout());
+        var result = NcReverse.FromText(nc);
+        Assert.Single(result.Panels);
+        var cut = result.Panels[0].Features.Single(f => f.Kind == "cutout");
+        Assert.NotNull(cut.Path);
+        var w = cut.Path!.Max(p => p.X) - cut.Path.Min(p => p.X);
+        var h = cut.Path.Max(p => p.Y) - cut.Path.Min(p => p.Y);
+        Assert.InRange(w, 36, 44);
+        Assert.InRange(h, 46, 54);
+        Assert.InRange(cut.Path.Min(p => p.X), 36, 44);
+        Assert.InRange(cut.Path.Min(p => p.Y), 16, 24);
     }
 
     [Fact]
