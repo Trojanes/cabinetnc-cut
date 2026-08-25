@@ -262,9 +262,15 @@ public static class NcProcessInfer
     {
         if (path.Count < 4) return path;
         // First chord is often the 45° ramp (long XY while arriving at cut Z).
+        // Do not peel a real side off a small closed window — that opens the
+        // loop and the hole is then classified as a groove.
         var d0 = Dist(path[0], path[1]);
         if (d0 > 8 && d0 < 80)
-            return path.Skip(1).ToList();
+        {
+            var skipped = path.Skip(1).ToList();
+            if (!IsClosed(path) || IsClosed(skipped))
+                return skipped;
+        }
         _ = cutZ;
         return path;
     }

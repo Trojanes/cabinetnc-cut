@@ -139,6 +139,14 @@ public class NcReverseTests
     }
 
     [Fact]
+    public void Infer_keeps_small_closed_window_as_contour()
+    {
+        var nc = EmitOffset(Outer(), InnerCutout());
+        var result = NcReverse.FromText(nc);
+        Assert.Equal(2, result.Ops.Count(o => o.Op == "contour"));
+    }
+
+    [Fact]
     public void Reverse_recovers_inner_cutout_not_cutter_center()
     {
         var nc = EmitOffset(Outer(), InnerCutout());
