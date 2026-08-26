@@ -540,6 +540,8 @@ public partial class MainWindow : Window
         public required string Title { get; init; }
         public required string Detail { get; init; }
         public required int SheetIndex { get; init; }
+        public required NestGroupKey KindKey { get; init; }
+        public required string KindLabel { get; init; }
         public required string ToolId { get; init; }
         public required string NcText { get; init; }
         public required IReadOnlyList<CutOp> Ops { get; init; }
@@ -637,6 +639,8 @@ public partial class MainWindow : Window
                     Title = $"{project} · {kindLabel} · 第 {n} 张",
                     Detail = detail,
                     SheetIndex = sheetGroup.Key,
+                    KindKey = key,
+                    KindLabel = kindLabel,
                     ToolId = string.Join("+", tools),
                     NcText = nc,
                     Ops = ops,
@@ -676,6 +680,15 @@ public partial class MainWindow : Window
         if (OutExportSelectedBtn is null || OutExportAllBtn is null) return;
         OutExportSelectedBtn.IsEnabled = OutFileList.SelectedItems.Count > 0;
         OutExportAllBtn.IsEnabled = _exportFiles.Count > 0;
+        if (OutExportKindBtn is not null)
+            OutExportKindBtn.IsEnabled = ExportFilesOfSelectedKind().Count > 0;
+    }
+
+    IReadOnlyList<ExportNcFile> ExportFilesOfSelectedKind()
+    {
+        var seed = OutFileList?.SelectedItem as ExportNcFile ?? _exportSelected;
+        if (seed is null) return [];
+        return _exportFiles.Where(f => f.KindKey.Equals(seed.KindKey)).ToList();
     }
 
     IReadOnlyList<ExportNcFile> SelectedExportFiles()
@@ -695,6 +708,17 @@ public partial class MainWindow : Window
         WriteExportNcFiles(files);
     }
 
+    void OnExportKindClick(object sender, RoutedEventArgs e)
+    {
+        var files = ExportFilesOfSelectedKind();
+        if (files.Count == 0)
+        {
+            SetStatus("请先选中一张该种类的大板");
+            return;
+        }
+        WriteExportNcFiles(files);
+    }
+
     void OnExportAllClick(object sender, RoutedEventArgs e)
     {
         if (_exportFiles.Count == 0)
@@ -709,7 +733,7 @@ public partial class MainWindow : Window
     {
         var names = files.Select(f => f.FileName).ToList();
         var snapshot = files.ToDictionary(f => f.FileName, StringComparer.Ordinal);
-        if (!GuardExportPreflight()) return;
+        if (!GuardExportPreflight(files)) return;
 
         var byName = _exportFiles.ToDictionary(f => f.FileName, StringComparer.Ordinal);
         var toWrite = new List<ExportNcFile>();
@@ -790,9 +814,12 @@ public partial class MainWindow : Window
             NcPreview.Text = file?.NcText ?? "";
         if (file is not null)
         {
-            _activeNestSheet = file.SheetIndex;
-            UpdateNestSheetChrome();
-            SetStatus($"导出 · {file.Title}");
+            if (_stage == "out")
+            {
+                _activeNestSheet = file.SheetIndex;
+                UpdateNestSheetChrome();
+                SetStatus($"导出 · {file.Title}");
+            }
         }
         if (OutPreviewCaption is not null)
         {
@@ -915,8 +942,8 @@ public partial class MainWindow : Window
             return ((float)s.WidthMm, (float)s.LengthMm, s.Label ?? s.Material ?? "");
         }
         var sheet = _session.Package?.Sheets.FirstOrDefault();
-        var w = (float)ParseMm(StockWidthBox.Text, sheet?.WidthMm > 0 ? sheet.WidthMm : 1220);
-        var h = (float)ParseMm(StockLengthBox.Text, sheet?.LengthMm > 0 ? sheet.LengthMm : 2440);
+        var w = (float)ParseMm(StockWidthBox.Text, sheet?.WidthMm > 0 ? sheet.WidthMm : 1200);
+        var h = (float)ParseMm(StockLengthBox.Text, sheet?.LengthMm > 0 ? sheet.LengthMm : 2400);
         return (w, h, "");
     }
 
@@ -1401,8 +1428,8 @@ public partial class MainWindow : Window
 
     void ReadSettingsUiIntoLibrary()
     {
-        _library.Nest.DefaultSheetWidthMm = ParseMm(SetSheetWBox.Text, 1220);
-        _library.Nest.DefaultSheetLengthMm = ParseMm(SetSheetLBox.Text, 2440);
+        _library.Nest.DefaultSheetWidthMm = ParseMm(SetSheetWBox.Text, 1200);
+        _library.Nest.DefaultSheetLengthMm = ParseMm(SetSheetLBox.Text, 2400);
         _library.Nest.SpacingMm = ParseMm(SetSpacingBox.Text, 12);
         _library.Nest.BorderMm = ParseMm(SetBorderBox.Text, 15);
         _library.Nest.AllowRotation = SetAllowRotChk.IsChecked == true;
@@ -1516,8 +1543,8 @@ public partial class MainWindow : Window
             return (s.WidthMm, s.LengthMm, th > 0 ? th : 18);
         }
         var pkgSheet = _session.Package?.Sheets.FirstOrDefault();
-        var w = ParseMm(StockWidthBox.Text, pkgSheet?.WidthMm > 0 ? pkgSheet.WidthMm : 1220);
-        var h = ParseMm(StockLengthBox.Text, pkgSheet?.LengthMm > 0 ? pkgSheet.LengthMm : 2440);
+        var w = ParseMm(StockWidthBox.Text, pkgSheet?.WidthMm > 0 ? pkgSheet.WidthMm : 1200);
+        var h = ParseMm(StockLengthBox.Text, pkgSheet?.LengthMm > 0 ? pkgSheet.LengthMm : 2400);
         var fallbackTh = _session.Package?.Panels.FirstOrDefault()?.ThicknessMm ?? 18;
         return (w, h, fallbackTh > 0 ? fallbackTh : 18);
     }
@@ -2356,33 +2383,48 @@ public partial class MainWindow : Window
             : new SolidColorBrush(Color.FromRgb(0xE0, 0x88, 0x88));
     }
 
-    PreflightReport RunPreflight()
+    PreflightReport RunPreflight(IReadOnlyList<ExportNcFile>? files = null, bool allSheets = false)
     {
         var profile = ActiveProfileForCam();
         var panels = _session.Package?.Panels.ToDictionary(p => p.PanelId, p => p);
         return NcPreflight.Check(
-            _opsOverlay,
+            OpsForPreflight(files, allSheets),
             profile,
-            ParseMm(StockWidthBox.Text, 1220),
-            ParseMm(StockLengthBox.Text, 2440),
+            ParseMm(StockWidthBox.Text, 1200),
+            ParseMm(StockLengthBox.Text, 2400),
             panels);
     }
+
+    IReadOnlyList<CutOp> OpsForPreflight(IReadOnlyList<ExportNcFile>? files, bool allSheets)
+    {
+        if (allSheets) return _opsOverlay;
+        files ??= ExportFilesOfSelectedKind();
+        if (files.Count == 0) return _opsOverlay;
+        var sheets = files.Select(f => f.SheetIndex).ToHashSet();
+        return _opsOverlay.Where(o => sheets.Contains(o.SheetIndex)).ToList();
+    }
+
+    HashSet<string>? _conflictCache;
 
     HashSet<string> CurrentConflicts()
     {
         if (_session.Package is null || _nest is not { Ok: true }) return [];
-        var places = _nest.Placements.Select(p => new NestPlacement
-        {
-            PanelId = p.PanelId,
-            SheetIndex = p.SheetIndex,
-            OffsetX = p.OffsetX,
-            OffsetY = p.OffsetY,
-            RotationDeg = p.RotationDeg,
-        }).ToList();
+        if (_dragMode is "nest" or "label" or "nestBox")
+            return _conflictCache ?? [];
+        var places = _nest.Placements
+            .Where(p => p.SheetIndex == _activeNestSheet)
+            .Select(p => new NestPlacement
+            {
+                PanelId = p.PanelId,
+                SheetIndex = p.SheetIndex,
+                OffsetX = p.OffsetX,
+                OffsetY = p.OffsetY,
+                RotationDeg = p.RotationDeg,
+            }).ToList();
         var hits = NestValidator.FindPolygonCollisions(
             _session.Package.Panels,
             places,
-            ParseMm(NestSpacingBox.Text, 12),
+            ActiveSheetSpacingMm(),
             PipIgnorePairs());
         var set = new HashSet<string>(StringComparer.Ordinal);
         foreach (var h in hits)
@@ -2390,6 +2432,7 @@ public partial class MainWindow : Window
             set.Add(h.PanelIdA);
             set.Add(h.PanelIdB);
         }
+        _conflictCache = set;
         return set;
     }
 
@@ -2434,7 +2477,7 @@ public partial class MainWindow : Window
         }
     }
 
-    void RefreshNestReport()
+    void RefreshNestReport(bool full = true)
     {
         NestUnplacedList.Items.Clear();
         NestGroupReportList.Items.Clear();
@@ -2469,7 +2512,7 @@ public partial class MainWindow : Window
         }
         var util = sheetArea > 0 ? used / sheetArea * 100 : 0;
         var gateOk = true;
-        if (_session.Package is not null)
+        if (full && _session.Package is not null)
         {
             var spacing = _stockKinds.Count > 0
                 ? _stockKinds.Min(k => k.SpacingMm)
@@ -4068,8 +4111,8 @@ public partial class MainWindow : Window
             // Blank template (ThicknessMm=0): GroupedBlfNester clones per material/thickness group.
             queue.Add(new NestSheetSpec
             {
-                WidthMm = ParseMm(StockWidthBox.Text, 1220),
-                LengthMm = ParseMm(StockLengthBox.Text, 2440),
+                WidthMm = ParseMm(StockWidthBox.Text, 1200),
+                LengthMm = ParseMm(StockLengthBox.Text, 2400),
                 BorderMm = border,
                 SpacingMm = fallbackSpacing,
                 AllowRotation = fallbackAllowRot,
@@ -4596,7 +4639,7 @@ public partial class MainWindow : Window
             MessageBoxButton.OK, report.Ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
     }
 
-    bool GuardExportPreflight()
+    bool GuardExportPreflight(IReadOnlyList<ExportNcFile>? files = null)
     {
         if (_session.ManufacturingDirty || _nest is not { Ok: true })
         {
@@ -4611,9 +4654,15 @@ public partial class MainWindow : Window
         if (_session.Package is not null)
         {
             var clearance = ParseMm(NestSpacingBox.Text, 12);
+            var places = CurrentNestPlacements();
+            if (files is { Count: > 0 })
+            {
+                var sheets = files.Select(f => f.SheetIndex).ToHashSet();
+                places = places.Where(p => sheets.Contains(p.SheetIndex)).ToList();
+            }
             var nestGate = NestExportGate.Check(
                 _session.Package.Panels,
-                CurrentNestPlacements(),
+                places,
                 clearance,
                 allowAabbOverlap: UsesTrueShapeNest(),
                 partInPartSlots: _partInPartSlots);
@@ -4630,7 +4679,7 @@ public partial class MainWindow : Window
         }
 
         RebuildOpsOverlay();
-        var report = RunPreflight();
+        var report = RunPreflight(files, allSheets: files is null);
         RefreshPreflightMeta();
         if (report.Ok) return true;
 
@@ -4823,8 +4872,8 @@ public partial class MainWindow : Window
     double? EstimateUtilization()
     {
         if (_session.Package is null || _nest is not { Ok: true }) return null;
-        var sw = ParseMm(StockWidthBox.Text, 1220);
-        var sh = ParseMm(StockLengthBox.Text, 2440);
+        var sw = ParseMm(StockWidthBox.Text, 1200);
+        var sh = ParseMm(StockLengthBox.Text, 2400);
         double used = 0;
         var placed = _nest.Placements.Select(p => p.PanelId).ToHashSet();
         foreach (var p in _session.Package.Panels.Where(p => placed.Contains(p.PanelId)))
@@ -4952,7 +5001,7 @@ public partial class MainWindow : Window
             LockPlaceBtn.Content = "解锁摆位";
         else
             LockPlaceBtn.Content = "锁定摆位";
-        if (_selected is not null && _nest is { Ok: true })
+        if (!_syncingNestSelection && _selected is not null && _nest is { Ok: true })
         {
             var place = _nest.Placements.FirstOrDefault(p => p.PanelId == _selected.PanelId);
             if (place is not null && place.SheetIndex != _activeNestSheet)
@@ -5101,8 +5150,6 @@ public partial class MainWindow : Window
                 if (labelId is not null)
                 {
                     var labelPanel = _session.Package.Panels.FirstOrDefault(p => p.PanelId == labelId);
-                    if (labelPanel is not null)
-                        PartList.SelectedItem = labelPanel;
                     _nestSelected.Clear();
                     _nestSelected.Add(labelId);
                     SyncPartListFromNestSelection(labelId);
@@ -5447,7 +5494,7 @@ public partial class MainWindow : Window
             var (_, _, hit) = NestDrag.Resolve(
                 panel, part.Id, ox, oy, part.Rot, _activeNestSheet,
                 others, byId, sw, sh, spacing, inset,
-                (ox, oy), allowOverlap: false);
+                (ox, oy), allowOverlap: false, PipIgnorePairs(), UsesTrueShapeNest());
             if (hit) blocked = true;
         }
 
@@ -5849,10 +5896,6 @@ public partial class MainWindow : Window
         {
             FinishNestBoxSelect();
         }
-        else if (_dragMode == "label")
-        {
-            RefreshExportFiles();
-        }
         else if (_dragMode == "nest" && _nestDragPanelId is not null && _nest is { Ok: true } && _session.Package is not null)
         {
             FinishNestDrag(_nestDragPanelId, _nestDragFromHold, _lastCanvasX, _lastCanvasY);
@@ -5924,23 +5967,41 @@ public partial class MainWindow : Window
         var place = _nest.Placements.FirstOrDefault(p => p.PanelId == panelId);
         if (place is null) return;
         var (sw, sh, _) = ActiveSheetMetrics();
+        var spacing = ActiveSheetSpacingMm();
+        var inset = ActiveSheetInsets();
+        var trueShape = UsesTrueShapeNest();
+        var allow = AllowOverlapChk.IsChecked == true;
+        var ignore = PipIgnorePairs();
         var others = _nest.Placements
             .Where(p => p.PanelId != panelId)
             .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
             .ToList();
-        var (ox, oy, _) = NestDrag.Resolve(
-            panel, panelId, place.OffsetX, place.OffsetY, place.RotationDeg, place.SheetIndex,
-            others, byId,
-            sw, sh,
-            ParseMm(NestSpacingBox.Text, 12), ParseMm(NestBorderBox.Text, 15),
-            (_nestOrigOx, _nestOrigOy),
-            AllowOverlapChk.IsChecked == true,
-            PipIgnorePairs());
+        var desiredOx = place.OffsetX;
+        var desiredOy = place.OffsetY;
+        var (ox, oy, blocked) = NestDrag.Resolve(
+            panel, panelId, desiredOx, desiredOy, place.RotationDeg, place.SheetIndex,
+            others, byId, sw, sh, spacing, inset,
+            (_nestOrigOx, _nestOrigOy), allow, ignore, trueShape);
+        if (blocked && !allow)
+        {
+            var members = BuildSlideMembers(byId, new HashSet<string>(StringComparer.Ordinal) { panelId }, panelId);
+            (ox, oy) = NestDrag.SlideTo(
+                members, panelId,
+                _nestOrigOx, _nestOrigOy, desiredOx, desiredOy,
+                place.SheetIndex, others, byId, sw, sh, spacing, inset,
+                _nestOrigOx, _nestOrigOy, ignore);
+            (_, _, blocked) = NestDrag.Resolve(
+                panel, panelId, ox, oy, place.RotationDeg, place.SheetIndex,
+                others, byId, sw, sh, spacing, inset,
+                (_nestOrigOx, _nestOrigOy), allow, ignore, trueShape);
+        }
         (ox, oy) = ClampPipChild(panelId, panel, ox, oy, place.RotationDeg);
         place.OffsetX = ox;
         place.OffsetY = oy;
-        SetStatus($"已移动 · {panel.DisplayPartName}");
-        RefreshNestReport();
+        SetStatus(blocked
+            ? "冲突，已退回原位"
+            : $"已移动 · {panel.DisplayPartName}");
+        RefreshNestReport(full: false);
         CanvasHost.InvalidateVisual();
     }
 
@@ -6040,9 +6101,11 @@ public partial class MainWindow : Window
         var byId = _session.Package.Panels.ToDictionary(p => p.PanelId);
         var groupIds = _nestGroupOrig.Keys.ToHashSet(StringComparer.Ordinal);
         var (sw, sh, _) = ActiveSheetMetrics();
-        var spacing = ParseMm(NestSpacingBox.Text, 12);
+        var spacing = ActiveSheetSpacingMm();
         var inset = ActiveSheetInsets();
         var allow = AllowOverlapChk.IsChecked == true;
+        var trueShape = UsesTrueShapeNest();
+        var ignore = PipIgnorePairs();
         var others = _nest.Placements
             .Where(p => !groupIds.Contains(p.PanelId))
             .Select(p => (p.PanelId, p.SheetIndex, p.OffsetX, p.OffsetY, p.RotationDeg))
@@ -6057,7 +6120,7 @@ public partial class MainWindow : Window
             var (_, _, blocked) = NestDrag.Resolve(
                 panel, id, place.OffsetX, place.OffsetY, place.RotationDeg, place.SheetIndex,
                 others, byId, sw, sh, spacing, inset,
-                (orig.Ox, orig.Oy), allow, PipIgnorePairs());
+                (orig.Ox, orig.Oy), allow, ignore, trueShape);
             if (blocked)
             {
                 revert = true;
@@ -6081,7 +6144,7 @@ public partial class MainWindow : Window
             var grabbed = byId.TryGetValue(grabbedId, out var gp) ? gp.DisplayPartName : grabbedId;
             SetStatus($"已移动 {_nestGroupOrig.Count} 件 · {grabbed}");
         }
-        RefreshNestReport();
+        RefreshNestReport(full: false);
         CanvasHost.InvalidateVisual();
     }
 
@@ -6516,7 +6579,8 @@ public partial class MainWindow : Window
                     HighlightPass: _stage == "out" ? null : _opsFocus,
                     HighlightStrategy: _stage == "out" ? null : _opsStrategy,
                     Bridges: _profileBridges,
-                    LabelOverrides: CurrentLabelOverrides()));
+                    LabelOverrides: CurrentLabelOverrides(),
+                    LitePaint: _dragMode is "nest" or "label" or "nestBox"));
             return;
         }
 
