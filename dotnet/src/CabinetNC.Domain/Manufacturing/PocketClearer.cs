@@ -190,23 +190,28 @@ public static class PocketClearer
             innerLoops.Add(loop);
         }
 
-        var segments = new List<IReadOnlyList<(double X, double Y)>> { outerLoop };
-        segments.AddRange(innerLoops);
+        // Two shop walls (outer + each hole). Each loop is closed; do not
+        // retrace the outer as FinishLoop — that was a third overlapping pass.
+        _ = emitFinish;
+        var segments = new List<IReadOnlyList<(double X, double Y)>>
+        {
+            StartOnLongestStraight(CloseRing(outerLoop)),
+        };
+        foreach (var loop in innerLoops)
+            segments.Add(StartOnLongestStraight(CloseRing(loop)));
         var flat = new List<(double X, double Y)>();
         foreach (var loop in segments)
         {
             if (flat.Count > 0)
                 flat.Add(loop[0]);
             flat.AddRange(loop);
-            if (emitFinish)
-                flat.Add(loop[0]);
         }
 
         return new PocketClearResult
         {
             Path = flat,
             Segments = segments,
-            FinishLoop = emitFinish ? outerLoop : null,
+            FinishLoop = null,
             PassCount = segments.Count,
             StepoverMm = step,
             InsetMm = inset,
@@ -229,6 +234,73 @@ public static class PocketClearer
             InsetMm = inset,
             TooSmallForTool = true,
         };
+    }
+
+    static IReadOnlyList<(double X, double Y)> StartOnLongestStraight(
+        IReadOnlyList<(double X, double Y)> loop)
+    {
+        if (loop.Count < 6)
+            return loop;
+        var pts = loop.ToList();
+        var closed = Dist(pts[0], pts[^1]) < 1e-6;
+        if (closed)
+            pts.RemoveAt(pts.Count - 1);
+        if (pts.Count < 5)
+            return loop;
+
+        var minX = pts.Min(p => p.X);
+        var maxX = pts.Max(p => p.X);
+        var minY = pts.Min(p => p.Y);
+        var maxY = pts.Max(p => p.Y);
+        var midX = (minX + maxX) / 2;
+        var midY = (minY + maxY) / 2;
+        const double band = 1.25;
+        int best;
+        if (maxX - minX >= maxY - minY)
+        {
+            var onEdge = pts
+                .Select((p, i) => (p, i))
+                .Where(t => Math.Abs(t.p.Y - minY) <= band)
+                .ToList();
+            best = onEdge.Count > 0
+                ? onEdge.OrderBy(t => Math.Abs(t.p.X - midX)).First().i
+                : 0;
+        }
+        else
+        {
+            var onEdge = pts
+                .Select((p, i) => (p, i))
+                .Where(t => Math.Abs(t.p.X - minX) <= band)
+                .ToList();
+            best = onEdge.Count > 0
+                ? onEdge.OrderBy(t => Math.Abs(t.p.Y - midY)).First().i
+                : 0;
+        }
+
+        RotateInPlace(pts, best);
+        if (closed)
+            pts.Add(pts[0]);
+        return pts;
+    }
+
+    static double Dist((double X, double Y) a, (double X, double Y) b)
+    {
+        var dx = a.X - b.X;
+        var dy = a.Y - b.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    static IReadOnlyList<(double X, double Y)> CloseRing(IReadOnlyList<(double X, double Y)> loop)
+    {
+        if (loop.Count < 3)
+            return loop;
+        var a = loop[0];
+        var b = loop[^1];
+        if (Math.Abs(a.X - b.X) < 1e-6 && Math.Abs(a.Y - b.Y) < 1e-6)
+            return loop;
+        var closed = loop.ToList();
+        closed.Add(a);
+        return closed;
     }
 
     static double RingSpan(IReadOnlyList<(double X, double Y)> ring)

@@ -100,7 +100,10 @@ public static class OpsPlanner
                     && Parts.PanelEdit.IsHole(f)
                     && ClearanceToolPick.CupOutline(f) is { Count: >= 3 } holeOutline)
                 {
-                    AddPocketOp(ops, panel, f, holeOutline, bounds, clearanceLargeMinShortMm);
+                    if (f.Through)
+                        AddThroughHoleContour(ops, panel, f, holeOutline, bounds);
+                    else
+                        AddPocketOp(ops, panel, f, holeOutline, bounds, clearanceLargeMinShortMm);
                 }
                 else if (enableContour
                     && ClearanceToolPick.IsHingeFeature(f)
@@ -192,6 +195,32 @@ public static class OpsPlanner
         return CamSafety.OrderSafe(depthApplied).ToList();
     }
 
+    static void AddThroughHoleContour(
+        List<CutOp> ops,
+        Parts.Panel panel,
+        Parts.PanelFeature f,
+        IReadOnlyList<(double X, double Y)> outline,
+        Nesting.LocalBounds? bounds)
+    {
+        if (PocketClearer.IsExportSliver(outline))
+            return;
+        if (bounds is { } panelBounds && PocketClearer.IsOffPanelArtifact(outline, panelBounds))
+            return;
+        ops.Add(new CutOp
+        {
+            Op = "contour",
+            PanelId = panel.PanelId,
+            FeatureId = f.FeatureId,
+            DepthMm = f.DepthMm ?? CamSafety.OuterContourDepthMm(panel.ThicknessMm),
+            Path = outline,
+            DiameterMm = f.DiameterMm,
+            PanelBounds = bounds,
+            Side = panel.Side ?? panel.Orientation?.MillingFace,
+            ThicknessMm = panel.ThicknessMm,
+            Through = true,
+        });
+    }
+
     static void AddPocketOp(
         List<CutOp> ops,
         Parts.Panel panel,
@@ -208,16 +237,17 @@ public static class OpsPlanner
         var toolId = ClearanceToolPick.Pick(f, clearanceLargeMinShortMm);
         var toolDia = ClearanceToolPick.DiameterOf(toolId);
         var directToSize = ClearanceToolPick.IsHingeFeature(f);
+        var holes = (f.Holes ?? [])
+            .Where(ring => ring.Count >= 3)
+            .Select(ring => (IReadOnlyList<(double X, double Y)>)ring.Select(p => (p.X, p.Y)).ToList())
+            .ToList();
         var cleared = PocketClearer.Clear(new PocketClearer.PocketClearRequest
         {
             Outline = outline,
-            Holes = (f.Holes ?? [])
-                .Where(ring => ring.Count >= 3)
-                .Select(ring => ring.Select(p => (p.X, p.Y)).ToList())
-                .ToList(),
+            Holes = holes,
             ToolDiameterMm = toolDia,
             OnionSkinMm = directToSize ? 0 : PocketClearer.DefaultOnionSkinMm,
-            EmitFinishLoop = !directToSize,
+            EmitFinishLoop = !directToSize && holes.Count == 0,
             CloseClearRings = directToSize,
         });
         ops.Add(new CutOp

@@ -166,5 +166,12 @@ public class PocketClearerTests
         Assert.False(result.TooSmallForTool);
         Assert.True(result.Segments.Count >= 2, $"segments={result.Segments.Count}");
         Assert.True(result.Path.Count > 8);
+        Assert.Null(result.FinishLoop);
+        Assert.All(result.Segments, loop =>
+        {
+            Assert.True(loop.Count >= 4);
+            Assert.Equal(loop[0].X, loop[^1].X, 6);
+            Assert.Equal(loop[0].Y, loop[^1].Y, 6);
+        });
     }
 }

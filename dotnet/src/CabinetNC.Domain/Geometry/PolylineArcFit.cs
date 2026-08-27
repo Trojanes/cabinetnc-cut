@@ -2,16 +2,25 @@ namespace CabinetNC.Domain.Geometry;
 
 /// <summary>
 /// Collapse real corner/cup fans into OSAI <c>G2/G3 R</c> arcs.
-/// Shallow bows (R larger than shop fillets) become one <c>G1</c> — they are
-/// tessellated straight edges, not part radii.
-/// Sharp polyline corners stay as <c>G1</c> (a 3-point L is not an arc).
+/// Shallow bows (R larger than shop fillets, small sweep) become one <c>G1</c> —
+/// they are tessellated straight edges, not part radii.
+/// Real lid/opening corners (R≈50, ~90°) stay arcs. Sharp polyline corners stay G1.
 /// </summary>
 public static class PolylineArcFit
 {
     public const double PointTolMm = 0.05;
     public const double MinRadiusMm = 0.5;
-    /// <summary>Above shop snap radii (≤21.58). R256-class “straight” edges stay G1.</summary>
-    public const double MaxRadiusMm = 22;
+    /// <summary>Shop snap fillets (≤21.58). R just above this (e.g. 21.96 on a
+    /// rectangular notch) is a false bow, not a fillet.</summary>
+    public const double MaxRadiusMm = 21.58;
+    /// <summary>Lounge lid / opening corners are R48.5–R55 at the tool centre.</summary>
+    public const double MaxCornerRadiusMm = 80;
+    /// <summary>
+    /// Real lid/opening corners are ~90°. Leftover long edges can fit a
+    /// 40–50° G2 around R70 — that is a tessellated straight, not a corner.
+    /// </summary>
+    public const double LargeArcMinSweepDeg = 70;
+    public const double LargeArcMinSagittaMm = 4;
     public const double MinSweepDeg = 8;
     public const double MinSagittaMm = 0.06;
 
@@ -142,7 +151,22 @@ public static class PolylineArcFit
             return false;
         if (r <= MaxRadiusMm)
             return false;
+        var sweep = SweepDeg(pts[i], pts[j], cx, cy, cw);
+        if (IsRealLargeCorner(r, sweep))
+            return false;
+        // First few chords of an R40–80 lid/rebate corner look like a shallow
+        // bow (sweep ≪ 40°). Do not swallow that lead-in as G1.
+        if (r <= MaxCornerRadiusMm && Dist(pts[i], pts[j]) < 1.6 * r)
+            return false;
         return AllOnCircle(pts, i, j, cx, cy, r) && SameTurn(pts, i, j, cw);
+    }
+
+    static bool IsRealLargeCorner(double r, double sweepDeg)
+    {
+        if (r <= MaxRadiusMm || r > MaxCornerRadiusMm)
+            return false;
+        var sagitta = r * (1 - Math.Cos(sweepDeg * Math.PI / 360));
+        return sweepDeg >= LargeArcMinSweepDeg && sagitta >= LargeArcMinSagittaMm;
     }
 
     static bool HasSharpCorner(IReadOnlyList<(double X, double Y)> pts, int i, int j)
@@ -196,20 +220,30 @@ public static class PolylineArcFit
         int j,
         double cx, double cy, double r, bool cw)
     {
-        if (r < MinRadiusMm || r > MaxRadiusMm) return false;
+        if (r < MinRadiusMm) return false;
         var sweep = SweepDeg(pts[i], pts[j], cx, cy, cw);
         if (sweep > 180.5) return false;
-        if (!AllOnCircle(pts, i, j, cx, cy, r)) return false;
+        if (r > MaxRadiusMm && !IsRealLargeCorner(r, sweep)) return false;
+        if (!AllOnCircle(pts, i, j, cx, cy, r, FitTolMm(r))) return false;
         if (!SameTurn(pts, i, j, cw)) return false;
         if (!AllShort(pts, i, j, r)) return false;
         return true;
     }
 
+    /// <summary>
+    /// Clipper round-join on a tessellated opening is not a perfect circle.
+    /// Tight 0.05 mm rejects the inner rebate wall and leaves a G1 stair.
+    /// </summary>
+    static double FitTolMm(double r) =>
+        Math.Max(PointTolMm, Math.Min(1.25, 0.028 * Math.Max(r, 1)));
+
     static bool AllOnCircle(
-        IReadOnlyList<(double X, double Y)> pts, int i, int j, double cx, double cy, double r)
+        IReadOnlyList<(double X, double Y)> pts, int i, int j, double cx, double cy, double r,
+        double? tolMm = null)
     {
+        var tol = tolMm ?? PointTolMm;
         for (var k = i; k <= j; k++)
-            if (!OnCircle(pts[k], cx, cy, r)) return false;
+            if (!OnCircle(pts[k], cx, cy, r, tol)) return false;
         return true;
     }
 
@@ -217,8 +251,17 @@ public static class PolylineArcFit
     {
         for (var k = i + 1; k < j; k++)
         {
-            var turn = Cross(pts[k - 1], pts[k], pts[k + 1]);
-            if (cw ? turn > 1e-9 : turn < -1e-9) return false;
+            var ax = pts[k].X - pts[k - 1].X;
+            var ay = pts[k].Y - pts[k - 1].Y;
+            var bx = pts[k + 1].X - pts[k].X;
+            var by = pts[k + 1].Y - pts[k].Y;
+            var d0 = Math.Sqrt(ax * ax + ay * ay);
+            var d1 = Math.Sqrt(bx * bx + by * by);
+            if (d0 < 1e-9 || d1 < 1e-9) continue;
+            var turn = ax * by - ay * bx;
+            // Clipper round-join can tick <0.3° the wrong way on a 5 mm chord.
+            if (Math.Abs(turn) < 0.08) continue;
+            if (cw ? turn > 0 : turn < 0) return false;
         }
         return true;
     }
@@ -244,8 +287,8 @@ public static class PolylineArcFit
         return true;
     }
 
-    static bool OnCircle((double X, double Y) p, double cx, double cy, double r) =>
-        Math.Abs(Dist(p, (cx, cy)) - r) <= PointTolMm;
+    static bool OnCircle((double X, double Y) p, double cx, double cy, double r, double? tolMm = null) =>
+        Math.Abs(Dist(p, (cx, cy)) - r) <= (tolMm ?? PointTolMm);
 
     static bool AllShort(IReadOnlyList<(double X, double Y)> pts, int i, int end, double r)
     {
@@ -255,7 +298,7 @@ public static class PolylineArcFit
     }
 
     static bool ShortChord((double X, double Y) a, (double X, double Y) b, double r) =>
-        Dist(a, b) <= Math.Max(2.5, 0.45 * r);
+        Dist(a, b) <= Math.Max(2.5, 0.72 * r);
 
     static double SweepDeg(
         (double X, double Y) start,

@@ -56,16 +56,16 @@ public static partial class NcEmitter
             }
 
             var profileOps = ordered.Where(o => o.Op == "contour").ToList();
-            foreach (var c in profileOps)
-            {
-                w.ToolChange(ToolNum(c.ToolId), recipe.ProfileFirstRpm > 0 ? recipe.ProfileFirstRpm : rpm);
-                EmitTroyProfile(w, c, recipe, lastPass: false);
-            }
-            foreach (var c in profileOps)
-            {
-                w.ToolChange(ToolNum(c.ToolId), recipe.ProfileLastRpm > 0 ? recipe.ProfileLastRpm : rpm);
-                EmitTroyProfile(w, c, recipe, lastPass: true);
-            }
+            var innerProfiles = profileOps
+                .Where(o => !string.IsNullOrWhiteSpace(o.FeatureId))
+                .ToList();
+            var outerProfiles = profileOps
+                .Where(o => string.IsNullOrWhiteSpace(o.FeatureId))
+                .ToList();
+            // Holes / windows finish both depths before the two overlapping
+            // outer-profile passes (leave 0.5, then through −0.55).
+            EmitTroyProfilePasses(w, innerProfiles, recipe, rpm);
+            EmitTroyProfilePasses(w, outerProfiles, recipe, rpm);
 
             foreach (var r in ordered.Where(o => o.Op == "remnant"))
             {
@@ -176,19 +176,21 @@ public static partial class NcEmitter
         }
 
         (double X, double Y)? lastCutPoint = null;
+        IReadOnlyList<(double X, double Y)>? firstSeg = null;
         foreach (var seg in segments)
         {
             if (seg.Count < 2) continue;
+            firstSeg ??= seg;
             if (lastCutPoint is not { } last || !SamePoint(last, seg[0]))
             {
                 w.Rapid(null, null, recipe.SafeZMm);
                 w.Rapid(seg[0].X, seg[0].Y, recipe.SafeZMm);
                 w.Feed(null, null, z, feedZ);
             }
-            EmitFittedXy(w, seg, feed, closed: false);
+            EmitFittedXy(w, seg, feed, closed: IsClosedLoop(seg));
             lastCutPoint = seg[^1];
         }
-        if (c.FinishLoop is { Count: >= 3 } finish)
+        if (c.FinishLoop is { Count: >= 3 } finish && !SameLoop(finish, firstSeg))
         {
             if (lastCutPoint is not { } last || !SamePoint(last, finish[0]))
             {
@@ -199,6 +201,24 @@ public static partial class NcEmitter
             EmitFittedXy(w, finish, feed, closed: true);
         }
         w.Rapid(null, null, recipe.SafeZMm);
+    }
+
+    static void EmitTroyProfilePasses(
+        OsaiTroyWriter w,
+        IReadOnlyList<CutOp> ops,
+        PostRecipe recipe,
+        double rpm)
+    {
+        foreach (var c in ops)
+        {
+            w.ToolChange(ToolNum(c.ToolId), recipe.ProfileFirstRpm > 0 ? recipe.ProfileFirstRpm : rpm);
+            EmitTroyProfile(w, c, recipe, lastPass: false);
+        }
+        foreach (var c in ops)
+        {
+            w.ToolChange(ToolNum(c.ToolId), recipe.ProfileLastRpm > 0 ? recipe.ProfileLastRpm : rpm);
+            EmitTroyProfile(w, c, recipe, lastPass: true);
+        }
     }
 
     static void EmitTroyGuillotine(OsaiTroyWriter w, CutOp r, PostRecipe recipe)
@@ -233,9 +253,13 @@ public static partial class NcEmitter
             && string.Equals(b.PanelId, c.PanelId, StringComparison.Ordinal)
             && string.Equals(b.FeatureId ?? "", c.FeatureId ?? "", StringComparison.Ordinal));
         var bridgeZ = Math.Max(cutZ, recipe.ProfileBridgeLeaveMm);
+        var toolDia = ClearanceToolPick.DiameterOf(c.ToolId ?? TroyRecipe.WorkToolId);
 
+        // First leave pass skips the tab at safe Z. Last through pass
+        // feeds the web at leave Z so the 5 mm middle stays attached.
         EmitPathFromArc(
-            w, path, c.ClosePath, startArc, cutZ, bridgeZ, feed, feedZ, bridges);
+            w, path, c.ClosePath, startArc, cutZ, bridgeZ, feed, feedZ,
+            bridges, toolDia, lastPass, safeZ);
         w.Rapid(null, null, safeZ);
     }
 
@@ -274,11 +298,14 @@ public static partial class NcEmitter
         double leaveZ,
         double feed,
         double feedZ,
-        IEnumerable<ProfileBridge> bridges)
+        IEnumerable<ProfileBridge> bridges,
+        double toolDiameterMm,
+        bool lastPass,
+        double safeZ)
     {
         var total = PolylineQuery.Length(path, closed);
         if (total < 1e-9) return;
-        var gaps = MergeGaps(BridgeGaps(bridges, total, closed), total);
+        var gaps = MergeGaps(BridgeGaps(bridges, total, closed, toolDiameterMm), total);
         var arcs = WalkSampleArcs(path, closed, startArc, total, gaps);
         if (arcs.Count == 0) return;
 
@@ -324,21 +351,31 @@ public static partial class NcEmitter
                 if (cutting)
                 {
                     FlushCut();
-                    var at0 = PtAt(a0);
-                    if (at0 is not null) run.Add(at0.Value);
-                    w.Feed(null, null, leaveZ, feedZ);
+                    if (lastPass)
+                    {
+                        var at0 = PtAt(a0);
+                        if (at0 is not null) run.Add(at0.Value);
+                        w.Feed(null, null, leaveZ, feedZ);
+                    }
+                    else
+                    {
+                        w.Rapid(null, null, safeZ);
+                    }
                     cutting = false;
                 }
-                run.Add(pt.Value);
+                if (lastPass)
+                    run.Add(pt.Value);
             }
             else
             {
                 if (!cutting)
                 {
                     FlushCut();
+                    var at0 = PtAt(a0);
+                    if (!lastPass && at0 is not null)
+                        w.Rapid(at0.Value.X, at0.Value.Y, null);
                     w.Feed(null, null, cutZ, feedZ);
                     cutting = true;
-                    var at0 = PtAt(a0);
                     if (at0 is not null) run.Add(at0.Value);
                 }
                 run.Add(pt.Value);
@@ -364,6 +401,25 @@ public static partial class NcEmitter
 
     static bool SamePoint((double X, double Y) a, (double X, double Y) b) =>
         Math.Abs(a.X - b.X) < 1e-6 && Math.Abs(a.Y - b.Y) < 1e-6;
+
+    static bool IsClosedLoop(IReadOnlyList<(double X, double Y)> path) =>
+        path.Count >= 4 && SamePoint(path[0], path[^1]);
+
+    static bool SameLoop(
+        IReadOnlyList<(double X, double Y)> a,
+        IReadOnlyList<(double X, double Y)>? b)
+    {
+        if (b is null || a.Count < 3 || b.Count < 3)
+            return false;
+        var n = Math.Min(a.Count, b.Count);
+        var take = Math.Min(n, 8);
+        for (var i = 0; i < take; i++)
+        {
+            if (!SamePoint(a[i], b[i]))
+                return false;
+        }
+        return SamePoint(a[0], b[0]) && SamePoint(a[^1], b[^1]);
+    }
 
     static List<double> WalkSampleArcs(
         IReadOnlyList<(double X, double Y)> path,
@@ -436,12 +492,12 @@ public static partial class NcEmitter
     }
 
     static List<(double A, double B)> BridgeGaps(
-        IEnumerable<ProfileBridge> bridges, double total, bool closed)
+        IEnumerable<ProfileBridge> bridges, double total, bool closed, double toolDiameterMm)
     {
         var gaps = new List<(double A, double B)>();
         foreach (var b in bridges)
         {
-            var half = Math.Max(0.2, b.WidthMm / 2);
+            var half = Math.Max(0.2, ProfileBridgePlanner.ToolCenterSpanMm(b.WidthMm, toolDiameterMm) / 2);
             var a = b.ArcLengthMm - half;
             var c = b.ArcLengthMm + half;
             if (!closed)

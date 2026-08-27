@@ -28,7 +28,16 @@ public sealed record BridgeClickResult(
 public static class ProfileBridgePlanner
 {
     public const int MaxPerPanel = 100;
+    /// <summary>Remaining web in the middle of the tab. Tool-centre skip adds 2× radius.</summary>
     public const double DefaultWidthMm = 5;
+
+    /// <summary>
+    /// Shop width is the leftover web. Tool centre must lift across
+    /// <paramref name="webMm"/> plus one diameter (two radii) so the
+    /// through-cuts on each side do not eat the tab.
+    /// </summary>
+    public static double ToolCenterSpanMm(double webMm, double toolDiameterMm) =>
+        Math.Max(0, webMm) + Math.Max(0, toolDiameterMm);
     /// <summary>Long/short &gt; this counts as a strip.</summary>
     public const double StripAspect = 12;
     public const double TinyAreaM2 = 0.1;
