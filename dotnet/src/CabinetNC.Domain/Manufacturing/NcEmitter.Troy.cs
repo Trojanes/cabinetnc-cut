@@ -23,6 +23,13 @@ public static partial class NcEmitter
         var grooves = list.Where(o => o.Op == "groove" && o.Path is { Count: >= 2 }).ToList();
         var remnants = list.Where(o => o.Op == "remnant" && o.Path is { Count: >= 2 }).ToList();
         var all = CamSafety.OrderSafe(contours.Concat(pockets).Concat(drills).Concat(grooves).Concat(remnants)).ToList();
+        if (recipe.Bridges.Count > 0)
+        {
+            var toolDia = ClearanceToolPick.DiameterOf(TroyRecipe.WorkToolId);
+            recipe = recipe.WithBridges(
+                ProfileBridgePlanner.EnsureFacingPairs(
+                    recipe.Bridges, all, null, toolDia));
+        }
 
         var w = new OsaiTroyWriter(recipe.HomeXyAtEnd);
         var rpm = recipe.ProfileFirstRpm > 0 ? recipe.ProfileFirstRpm : TroyRecipe.SpindleRpm;
@@ -32,17 +39,22 @@ public static partial class NcEmitter
         foreach (var group in all.GroupBy(o => o.SheetIndex).OrderBy(g => g.Key))
         {
             var ordered = CamSafety.OrderSafe(group).ToList();
+            var atX = 0d;
+            var atY = 0d;
 
             foreach (var d in ordered.Where(o => o.Op == "drill"))
             {
                 w.ToolChange(ToolNum(d.ToolId), recipe.DrillRpm > 0 ? recipe.DrillRpm : rpm);
                 EmitTroyDrill(w, d, recipe);
+                if (d.SheetX is double sx && d.SheetY is double sy)
+                    (atX, atY) = (sx, sy);
             }
 
             foreach (var g in ordered.Where(o => o.Op == "groove" && o.IsTongue))
             {
                 w.ToolChange(ToolNum(g.ToolId), recipe.TongueRpm > 0 ? recipe.TongueRpm : rpm);
                 EmitTroyGroove(w, g, recipe, recipe.TongueFeed, recipe.TonguePlunge);
+                (atX, atY) = LastXy(g, atX, atY);
             }
 
             foreach (var c in ordered.Where(o => o.Op == "pocket"
@@ -53,6 +65,7 @@ public static partial class NcEmitter
                     EmitTroyPocket(w, c, recipe);
                 else
                     EmitTroyGroove(w, c, recipe, recipe.ClearanceFeed, recipe.ClearancePlunge);
+                (atX, atY) = LastXy(c, atX, atY);
             }
 
             var profileOps = ordered.Where(o => o.Op == "contour").ToList();
@@ -62,15 +75,17 @@ public static partial class NcEmitter
             var outerProfiles = profileOps
                 .Where(o => string.IsNullOrWhiteSpace(o.FeatureId))
                 .ToList();
-            // Holes / windows finish both depths before the two overlapping
-            // outer-profile passes (leave 0.5, then through −0.55).
-            EmitTroyProfilePasses(w, innerProfiles, recipe, rpm);
-            EmitTroyProfilePasses(w, outerProfiles, recipe, rpm);
+            // One leave pass for every window + outer, then one through pass.
+            EmitTroyProfilePass(w, innerProfiles, recipe, rpm, ref atX, ref atY, lastPass: false, optimize: false);
+            EmitTroyProfilePass(w, outerProfiles, recipe, rpm, ref atX, ref atY, lastPass: false, optimize: true);
+            EmitTroyProfilePass(w, innerProfiles, recipe, rpm, ref atX, ref atY, lastPass: true, optimize: false);
+            EmitTroyProfilePass(w, outerProfiles, recipe, rpm, ref atX, ref atY, lastPass: true, optimize: true);
 
             foreach (var r in ordered.Where(o => o.Op == "remnant"))
             {
                 w.ToolChange(ToolNum(r.ToolId), recipe.ProfileLastRpm > 0 ? recipe.ProfileLastRpm : rpm);
                 EmitTroyGuillotine(w, r, recipe);
+                (atX, atY) = LastXy(r, atX, atY);
             }
         }
 
@@ -125,24 +140,14 @@ public static partial class NcEmitter
                 foreach (var seg in segments)
                 {
                     if (seg.Count < 2) continue;
-                    if (lastCutPoint is not { } last || !SamePoint(last, seg[0]))
-                    {
-                        w.Rapid(null, null, recipe.SafeZMm);
-                        w.Rapid(seg[0].X, seg[0].Y, recipe.SafeZMm);
-                        w.Feed(null, null, z, feedZ);
-                    }
+                    ApproachOrLinkAtDepth(w, lastCutPoint, seg[0], z, feed, feedZ, recipe.SafeZMm);
                     EmitFittedXy(w, seg, feed, closed: false);
                     lastCutPoint = seg[^1];
                 }
             }
             if (g.FinishLoop is { Count: >= 3 } finish)
             {
-                if (lastCutPoint is not { } last || !SamePoint(last, finish[0]))
-                {
-                    w.Rapid(null, null, recipe.SafeZMm);
-                    w.Rapid(finish[0].X, finish[0].Y, recipe.SafeZMm);
-                    w.Feed(null, null, z, feedZ);
-                }
+                ApproachOrLinkAtDepth(w, lastCutPoint, finish[0], z, feed, feedZ, recipe.SafeZMm);
                 EmitFittedXy(w, finish, feed, closed: true);
             }
             w.Rapid(null, null, recipe.SafeZMm);
@@ -181,44 +186,62 @@ public static partial class NcEmitter
         {
             if (seg.Count < 2) continue;
             firstSeg ??= seg;
-            if (lastCutPoint is not { } last || !SamePoint(last, seg[0]))
-            {
-                w.Rapid(null, null, recipe.SafeZMm);
-                w.Rapid(seg[0].X, seg[0].Y, recipe.SafeZMm);
-                w.Feed(null, null, z, feedZ);
-            }
+            ApproachOrLinkAtDepth(w, lastCutPoint, seg[0], z, feed, feedZ, recipe.SafeZMm);
             EmitFittedXy(w, seg, feed, closed: IsClosedLoop(seg));
             lastCutPoint = seg[^1];
         }
         if (c.FinishLoop is { Count: >= 3 } finish && !SameLoop(finish, firstSeg))
         {
-            if (lastCutPoint is not { } last || !SamePoint(last, finish[0]))
-            {
-                w.Rapid(null, null, recipe.SafeZMm);
-                w.Rapid(finish[0].X, finish[0].Y, recipe.SafeZMm);
-                w.Feed(null, null, z, feedZ);
-            }
+            ApproachOrLinkAtDepth(w, lastCutPoint, finish[0], z, feed, feedZ, recipe.SafeZMm);
             EmitFittedXy(w, finish, feed, closed: true);
         }
         w.Rapid(null, null, recipe.SafeZMm);
     }
 
-    static void EmitTroyProfilePasses(
+    static void EmitTroyProfilePass(
         OsaiTroyWriter w,
         IReadOnlyList<CutOp> ops,
         PostRecipe recipe,
-        double rpm)
+        double rpm,
+        ref double atX,
+        ref double atY,
+        bool lastPass,
+        bool optimize)
     {
-        foreach (var c in ops)
+        if (ops.Count == 0) return;
+        var ordered = !optimize
+            ? ops
+            : lastPass
+                ? OuterProfileOrder.Safest(ops, atX, atY)
+                : OuterProfileOrder.Fastest(ops, atX, atY);
+        var passRpm = lastPass
+            ? (recipe.ProfileLastRpm > 0 ? recipe.ProfileLastRpm : rpm)
+            : (recipe.ProfileFirstRpm > 0 ? recipe.ProfileFirstRpm : rpm);
+        foreach (var c in ordered)
         {
-            w.ToolChange(ToolNum(c.ToolId), recipe.ProfileFirstRpm > 0 ? recipe.ProfileFirstRpm : rpm);
-            EmitTroyProfile(w, c, recipe, lastPass: false);
+            w.ToolChange(ToolNum(c.ToolId), passRpm);
+            (atX, atY) = EmitTroyProfile(w, c, recipe, lastPass, atX, atY, pickEntry: optimize);
         }
-        foreach (var c in ops)
+    }
+
+    static (double X, double Y) LastXy(CutOp o, double fallbackX, double fallbackY)
+    {
+        if (o.FinishLoop is { Count: > 0 } fin)
+            return fin[^1];
+        if (o.PathSegments is { Count: > 0 } segs)
         {
-            w.ToolChange(ToolNum(c.ToolId), recipe.ProfileLastRpm > 0 ? recipe.ProfileLastRpm : rpm);
-            EmitTroyProfile(w, c, recipe, lastPass: true);
+            for (var i = segs.Count - 1; i >= 0; i--)
+            {
+                if (segs[i].Count >= 1)
+                    return segs[i][^1];
+            }
         }
+
+        if (o.Path is { Count: > 0 } path)
+            return path[^1];
+        if (o.SheetX is double sx && o.SheetY is double sy)
+            return (sx, sy);
+        return (fallbackX, fallbackY);
     }
 
     static void EmitTroyGuillotine(OsaiTroyWriter w, CutOp r, PostRecipe recipe)
@@ -233,34 +256,41 @@ public static partial class NcEmitter
         w.Rapid(null, null, recipe.SafeZMm);
     }
 
-    static void EmitTroyProfile(OsaiTroyWriter w, CutOp c, PostRecipe recipe, bool lastPass)
+    static (double X, double Y) EmitTroyProfile(
+        OsaiTroyWriter w, CutOp c, PostRecipe recipe, bool lastPass,
+        double fromX, double fromY, bool pickEntry)
     {
         var path = c.Path!;
         var safeZ = recipe.SafeZMm;
         var cutZ = lastPass ? recipe.ProfileThroughZMm : recipe.ProfileFirstLeaveMm;
         var feed = lastPass ? recipe.ProfileLastFeed : recipe.ProfileFirstFeed;
         var feedZ = lastPass ? recipe.ProfileLastPlunge : recipe.ProfileFirstPlunge;
-        w.Rapid(path[0].X, path[0].Y, safeZ);
+        var entryArc = pickEntry ? OuterProfileOrder.EntryArc(path, fromX, fromY) : 0;
+        var entry = PolylineQuery.PointAtArc(path, entryArc, c.ClosePath) ?? path[0];
+        w.Rapid(entry.X, entry.Y, safeZ);
 
-        var startArc = 0d;
+        var startArc = entryArc;
         if (!lastPass && recipe.ProfileFirstRamp45)
-            startArc = EmitRamp45(w, path, c.ClosePath, safeZ, cutZ, feedZ);
+            startArc = EmitRamp45(w, path, c.ClosePath, safeZ, cutZ, feedZ, entryArc);
         else
             w.Feed(null, null, cutZ, feedZ);
 
-        var bridges = recipe.Bridges.Where(b =>
-            b.SheetIndex == c.SheetIndex
-            && string.Equals(b.PanelId, c.PanelId, StringComparison.Ordinal)
-            && string.Equals(b.FeatureId ?? "", c.FeatureId ?? "", StringComparison.Ordinal));
-        var bridgeZ = Math.Max(cutZ, recipe.ProfileBridgeLeaveMm);
+        // First leave pass cuts the whole loop at 0.5 — that skin is the tab.
+        // Last through pass still lifts over the web so the 0.5 mm stays.
+        var bridges = lastPass
+            ? recipe.Bridges.Where(b =>
+                b.SheetIndex == c.SheetIndex
+                && string.Equals(b.PanelId, c.PanelId, StringComparison.Ordinal)
+                && string.Equals(b.FeatureId ?? "", c.FeatureId ?? "", StringComparison.Ordinal))
+            : [];
+        var bridgeZ = Math.Max(cutZ, recipe.ProfileFirstLeaveMm);
         var toolDia = ClearanceToolPick.DiameterOf(c.ToolId ?? TroyRecipe.WorkToolId);
 
-        // First leave pass skips the tab at safe Z. Last through pass
-        // feeds the web at leave Z so the 5 mm middle stays attached.
         EmitPathFromArc(
             w, path, c.ClosePath, startArc, cutZ, bridgeZ, feed, feedZ,
-            bridges, toolDia, lastPass, safeZ);
+            bridges, toolDia, lastPass, safeZ, c.CadPath);
         w.Rapid(null, null, safeZ);
+        return entry;
     }
 
     static double EmitRamp45(
@@ -269,24 +299,25 @@ public static partial class NcEmitter
         bool closed,
         double safeZ,
         double cutZ,
-        double feedZ)
+        double feedZ,
+        double startArc = 0)
     {
         var dz = Math.Abs(safeZ - cutZ);
         var total = PolylineQuery.Length(path, closed);
         if (dz < 1e-6 || total < 1e-6)
         {
             w.Feed(null, null, cutZ, feedZ);
-            return 0;
+            return startArc;
         }
         var along = Math.Min(dz, total);
-        var pt = PolylineQuery.PointAtArc(path, along, closed);
+        var pt = PolylineQuery.PointAtArc(path, startArc + along, closed);
         if (pt is null)
         {
             w.Feed(null, null, cutZ, feedZ);
-            return 0;
+            return startArc;
         }
         w.Feed(pt.Value.X, pt.Value.Y, cutZ, feedZ);
-        return along;
+        return startArc + along;
     }
 
     static void EmitPathFromArc(
@@ -301,7 +332,8 @@ public static partial class NcEmitter
         IEnumerable<ProfileBridge> bridges,
         double toolDiameterMm,
         bool lastPass,
-        double safeZ)
+        double safeZ,
+        IReadOnlyList<CadSegment>? cadPath = null)
     {
         var total = PolylineQuery.Length(path, closed);
         if (total < 1e-9) return;
@@ -309,12 +341,29 @@ public static partial class NcEmitter
         var arcs = WalkSampleArcs(path, closed, startArc, total, gaps);
         if (arcs.Count == 0) return;
 
+        var useCad = cadPath is { Count: > 0 };
+        var cadTotal = useCad ? Geometry.CadPath.Length(cadPath!, closed) : 0;
         var run = new List<(double X, double Y)>();
+        var runA0 = 0d;
+        var runA1 = 0d;
+        var haveRunArc = false;
         void FlushCut()
         {
+            if (useCad && haveRunArc && cadTotal > 1e-9)
+            {
+                var slice = Geometry.CadPath.Slice(cadPath!, runA0, runA1, closed);
+                if (slice.Count > 0)
+                {
+                    EmitCadXy(w, slice, feed);
+                    run.Clear();
+                    haveRunArc = false;
+                    return;
+                }
+            }
             if (run.Count < 2)
             {
                 run.Clear();
+                haveRunArc = false;
                 return;
             }
             var loop = run.Count >= 4
@@ -323,6 +372,7 @@ public static partial class NcEmitter
                     + (run[0].Y - run[^1].Y) * (run[0].Y - run[^1].Y)) < 0.05;
             EmitFittedXy(w, run, feed, closed: loop);
             run.Clear();
+            haveRunArc = false;
         }
 
         (double X, double Y)? PtAt(double a)
@@ -333,7 +383,12 @@ public static partial class NcEmitter
 
         var startPt = PtAt(arcs[0]);
         if (startPt is not null)
+        {
             run.Add(startPt.Value);
+            runA0 = ScaleArc(arcs[0], total, cadTotal, useCad);
+            runA1 = runA0;
+            haveRunArc = true;
+        }
 
         var cutting = true;
         for (var i = 1; i < arcs.Count; i++)
@@ -355,6 +410,8 @@ public static partial class NcEmitter
                     {
                         var at0 = PtAt(a0);
                         if (at0 is not null) run.Add(at0.Value);
+                        runA0 = ScaleArc(a0, total, cadTotal, useCad);
+                        haveRunArc = true;
                         w.Feed(null, null, leaveZ, feedZ);
                     }
                     else
@@ -364,7 +421,11 @@ public static partial class NcEmitter
                     cutting = false;
                 }
                 if (lastPass)
+                {
                     run.Add(pt.Value);
+                    runA1 = ScaleArc(a1, total, cadTotal, useCad);
+                    haveRunArc = true;
+                }
             }
             else
             {
@@ -377,11 +438,64 @@ public static partial class NcEmitter
                     w.Feed(null, null, cutZ, feedZ);
                     cutting = true;
                     if (at0 is not null) run.Add(at0.Value);
+                    runA0 = ScaleArc(a0, total, cadTotal, useCad);
+                    haveRunArc = true;
                 }
                 run.Add(pt.Value);
+                runA1 = ScaleArc(a1, total, cadTotal, useCad);
+                haveRunArc = true;
             }
         }
         FlushCut();
+    }
+
+    static double ScaleArc(double arc, double polyTotal, double cadTotal, bool useCad) =>
+        useCad && polyTotal > 1e-9 ? arc / polyTotal * cadTotal : arc;
+
+    static void EmitCadXy(OsaiTroyWriter w, IReadOnlyList<CadSegment> segs, double feed)
+    {
+        foreach (var g in segs)
+        {
+            if (g.IsCircle && g.Center is { } cc && g.RadiusMm > 0)
+            {
+                var mid = new Point2(
+                    2 * cc.X - g.Start.X,
+                    2 * cc.Y - g.Start.Y);
+                w.Arc(g.Cw, mid.X, mid.Y, g.RadiusMm, feed);
+                w.Arc(g.Cw, g.End.X, g.End.Y, g.RadiusMm, feed);
+            }
+            else if (g.IsArc && g.RadiusMm > 0)
+                w.Arc(g.Cw, g.End.X, g.End.Y, g.RadiusMm, feed);
+            else
+                w.Feed(g.End.X, g.End.Y, null, feed);
+        }
+    }
+
+    /// <summary>
+    /// First entry of a feature: SafeZ rapid + plunge. Same feature, next wall:
+    /// stay at cut Z and feed across the floor (Carveco). Different features
+    /// are separate ops and still retract at the end of each emit.
+    /// </summary>
+    static void ApproachOrLinkAtDepth(
+        OsaiTroyWriter w,
+        (double X, double Y)? lastCutPoint,
+        (double X, double Y) next,
+        double z,
+        double xyFeed,
+        double plungeFeed,
+        double safeZ)
+    {
+        if (lastCutPoint is { } last && SamePoint(last, next))
+            return;
+        if (lastCutPoint is not null)
+        {
+            w.Feed(next.X, next.Y, z, xyFeed);
+            return;
+        }
+
+        w.Rapid(null, null, safeZ);
+        w.Rapid(next.X, next.Y, safeZ);
+        w.Feed(null, null, z, plungeFeed);
     }
 
     static void EmitFittedXy(
@@ -617,7 +731,6 @@ public static partial class NcEmitter
             Line("G17");
             _x = _y = _z = _f = null;
             Tool = tool;
-            Rapid(0, 0, null);
         }
 
         public void EndProgram()

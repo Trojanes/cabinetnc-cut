@@ -192,13 +192,18 @@ public static class PocketClearer
 
         // Two shop walls (outer + each hole). Each loop is closed; do not
         // retrace the outer as FinishLoop — that was a third overlapping pass.
+        // Inner wall starts nearest the previous end so the stay-down link
+        // stays in the cleared band (Carveco).
         _ = emitFinish;
-        var segments = new List<IReadOnlyList<(double X, double Y)>>
-        {
-            StartOnLongestStraight(CloseRing(outerLoop)),
-        };
+        var outerSeg = StartOnLongestStraight(CloseRing(outerLoop));
+        var segments = new List<IReadOnlyList<(double X, double Y)>> { outerSeg };
+        var last = outerSeg[^1];
         foreach (var loop in innerLoops)
-            segments.Add(StartOnLongestStraight(CloseRing(loop)));
+        {
+            var inner = StartNear(CloseRing(loop), last);
+            segments.Add(inner);
+            last = inner[^1];
+        }
         var flat = new List<(double X, double Y)>();
         foreach (var loop in segments)
         {
@@ -278,6 +283,24 @@ public static class PocketClearer
         }
 
         RotateInPlace(pts, best);
+        if (closed)
+            pts.Add(pts[0]);
+        return pts;
+    }
+
+    static IReadOnlyList<(double X, double Y)> StartNear(
+        IReadOnlyList<(double X, double Y)> loop,
+        (double X, double Y) near)
+    {
+        if (loop.Count < 3)
+            return loop;
+        var pts = loop.ToList();
+        var closed = Dist(pts[0], pts[^1]) < 1e-6;
+        if (closed)
+            pts.RemoveAt(pts.Count - 1);
+        if (pts.Count == 0)
+            return loop;
+        RotateInPlace(pts, NearestIndex(pts, near));
         if (closed)
             pts.Add(pts[0]);
         return pts;

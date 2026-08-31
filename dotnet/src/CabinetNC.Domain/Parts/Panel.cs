@@ -23,6 +23,10 @@ public sealed class PanelFeature
     public IReadOnlyList<Point2>? Profile { get; init; }
     /// <summary>Closed holes inside a pocket (rebate ring).</summary>
     public IReadOnlyList<IReadOnlyList<Point2>>? Holes { get; init; }
+    /// <summary>Exact CAD entities for <see cref="Profile"/> / cutout path.</summary>
+    public IReadOnlyList<CadSegment>? ProfileSegments { get; init; }
+    /// <summary>Exact CAD entities for each rebate hole ring.</summary>
+    public IReadOnlyList<IReadOnlyList<CadSegment>>? HoleSegments { get; init; }
 }
 
 public sealed class WorkpieceFace

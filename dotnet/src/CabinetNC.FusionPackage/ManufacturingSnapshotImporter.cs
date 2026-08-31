@@ -334,6 +334,7 @@ public static class ManufacturingSnapshotImporter
                 Points = outline,
                 Closed = true,
                 Frame = "panelLocal",
+                Segments = ReadSegments(workpiece.Geometry.OuterProfile.Segments),
             },
             Features = features,
             Faces = faces,
@@ -398,6 +399,7 @@ public static class ManufacturingSnapshotImporter
                 Y = points[0].Y,
                 Path = points,
                 Profile = points,
+                ProfileSegments = ReadSegments(profile.Segments),
             };
             if (IsDuplicateThroughFeature(candidate, features))
                 continue;
@@ -491,6 +493,8 @@ public static class ManufacturingSnapshotImporter
                 Path = f.Path,
                 Profile = f.Profile,
                 Holes = f.Holes,
+                ProfileSegments = f.ProfileSegments,
+                HoleSegments = f.HoleSegments,
             };
         }).ToList();
 
@@ -592,6 +596,8 @@ public static class ManufacturingSnapshotImporter
         }
 
         var holes = ReadHoles(feature, path);
+        var holeSegs = ReadHoleSegments(feature);
+        var profileSegs = ReadSegments(feature.Geometry.Profile?.Segments);
 
         return new PanelFeature
         {
@@ -610,6 +616,8 @@ public static class ManufacturingSnapshotImporter
             Path = featurePath,
             Profile = profile,
             Holes = holes,
+            ProfileSegments = profileSegs,
+            HoleSegments = holeSegs,
         };
     }
 
@@ -677,6 +685,45 @@ public static class ManufacturingSnapshotImporter
             area += a.X * b.Y - b.X * a.Y;
         }
         return (cx, cy, Math.Abs(area) * 0.5);
+    }
+
+    static IReadOnlyList<CadSegment>? ReadSegments(IReadOnlyList<SnapshotSegment>? raw)
+    {
+        if (raw is not { Count: > 0 }) return null;
+        var list = new List<CadSegment>();
+        foreach (var s in raw)
+        {
+            var type = (s.Type ?? "line").Trim().ToLowerInvariant();
+            if (s.Start.Count < 2 || s.End.Count < 2) continue;
+            var start = new Point2(s.Start[0], s.Start[1]);
+            var end = new Point2(s.End[0], s.End[1]);
+            if (type is "arc" or "circle")
+            {
+                if (s.Center is not { Count: >= 2 } || s.RadiusMm is null or <= 0)
+                    continue;
+                var center = new Point2(s.Center[0], s.Center[1]);
+                list.Add(type == "circle"
+                    ? CadSegment.MakeCircle(center, s.RadiusMm.Value, start, s.Cw)
+                    : CadSegment.MakeArc(start, end, center, s.RadiusMm.Value, s.Cw));
+            }
+            else
+                list.Add(CadSegment.MakeLine(start, end));
+        }
+        return list.Count > 0 ? list : null;
+    }
+
+    static IReadOnlyList<IReadOnlyList<CadSegment>>? ReadHoleSegments(SnapshotFeature feature)
+    {
+        var raw = feature.Geometry.Holes;
+        if (raw is not { Count: > 0 }) return null;
+        var holes = new List<IReadOnlyList<CadSegment>>();
+        foreach (var hole in raw)
+        {
+            var segs = ReadSegments(hole.Segments);
+            if (segs is { Count: > 0 })
+                holes.Add(segs);
+        }
+        return holes.Count > 0 ? holes : null;
     }
 
     static List<Point2> ReadPoints(

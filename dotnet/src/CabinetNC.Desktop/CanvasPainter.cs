@@ -184,7 +184,12 @@ static class CanvasPainter
         OpsToolpathKind? HighlightToolpath = null,
         IReadOnlyList<ProfileBridge>? Bridges = null,
         IReadOnlyDictionary<string, (double X, double Y)>? LabelOverrides = null,
-        bool LitePaint = false);
+        bool LitePaint = false,
+        IReadOnlyList<ToolStroke>? NcSimStrokes = null,
+        double NcSimTimeSec = 0,
+        bool FaintParts = false,
+        float? OriginX = null,
+        float? OriginY = null);
 
     public static void PaintNest(
         SKCanvas canvas,
@@ -196,21 +201,23 @@ static class CanvasPainter
     {
         canvas.Clear(new SKColor(0xF4, 0xF4, 0xF4));
         var pad = opts.Pad;
+        var ox = opts.OriginX ?? pad;
+        var oy = opts.OriginY ?? pad;
         var scale = opts.Scale;
         var sw = opts.SheetW;
         var sh = opts.SheetH;
         if (scale <= 0) return;
 
-        float ToSx(double x) => pad + (float)x * scale;
-        float ToSy(double y) => pad + (sh - (float)y) * scale;
+        float ToSx(double x) => ox + (float)x * scale;
+        float ToSy(double y) => oy + (sh - (float)y) * scale;
 
         // sheet
         using (var fill = new SKPaint { Color = SKColors.White, IsAntialias = true })
         using (var stroke = new SKPaint { Color = SKColors.Black, IsStroke = true, StrokeWidth = 1, IsAntialias = true })
         {
-            canvas.DrawRect(pad, pad, sw * scale, sh * scale, fill);
-            DrawSheetGrid(canvas, pad, scale, sw, sh);
-            canvas.DrawRect(pad, pad, sw * scale, sh * scale, stroke);
+            canvas.DrawRect(ox, oy, sw * scale, sh * scale, fill);
+            DrawSheetGrid(canvas, ox, oy, scale, sw, sh);
+            canvas.DrawRect(ox, oy, sw * scale, sh * scale, stroke);
         }
 
         DrawDimHScreen(canvas, ToSx(0), ToSx(sw), ToSy(sh) - 14, Fmt(sw));
@@ -240,8 +247,14 @@ static class CanvasPainter
                 : locked ? new SKColor(0xC0, 0x45, 0x2D)
                 : active ? new SKColor(0x00, 0x66, 0xCC) : SKColors.Black;
             var lw = active || conflict || locked ? 2f : 1f;
+            if (opts.FaintParts)
+            {
+                fillC = new SKColor(0xF4, 0xF4, 0xF4);
+                strokeC = new SKColor(0xC4, 0xC4, 0xC4);
+                lw = 1f;
+            }
 
-            using var path = BuildWorldPath(panel, place, pad, scale, sh);
+            using var path = BuildWorldPath(panel, place, ox, oy, scale, sh);
             using var fill = new SKPaint { Color = fillC, IsAntialias = true };
             using var stroke = new SKPaint { Color = strokeC, IsStroke = true, StrokeWidth = lw, IsAntialias = true };
             canvas.DrawPath(path, fill);
@@ -345,7 +358,7 @@ static class CanvasPainter
         }
 
         if (drawList.Count == 0)
-            DrawText(canvas, $"本张大板无摆位（第 {sheetIdx + 1} 张）", pad + 8, pad + 20, 12, new SKColor(0x66, 0x66, 0x66));
+            DrawText(canvas, $"本张大板无摆位（第 {sheetIdx + 1} 张）", ox + 8, oy + 20, 12, new SKColor(0x66, 0x66, 0x66));
 
         if (opts.GuillotinePolyline is { Count: >= 2 } gpoly)
         {
@@ -393,6 +406,9 @@ static class CanvasPainter
 
         if (opts.ShowOps && opts.Bridges is { Count: > 0 } bridges)
             PaintBridges(canvas, bridges, ToSx, ToSy, scale, opts.ActiveSheetIndex);
+
+        if (opts.NcSimStrokes is { Count: > 0 } sim)
+            PaintNcSim(canvas, sim, opts.NcSimTimeSec, ToSx, ToSy, scale);
 
         if (opts.HoldingBayLeft > 0 && opts.HoldingBayLeft < w - 4)
             PaintHoldingBay(
@@ -887,6 +903,116 @@ static class CanvasPainter
         }
     }
 
+    static void PaintNcSim(
+        SKCanvas canvas,
+        IReadOnlyList<ToolStroke> strokes,
+        double timeSec,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        float scale)
+    {
+        var pose = NcCutSim.At(strokes, timeSec);
+
+        for (var i = 0; i < strokes.Count; i++)
+        {
+            var s = strokes[i];
+            if (i > pose.StrokeIndex)
+            {
+                DrawNcStroke(canvas, s, 0, 1, false, toSx, toSy, scale);
+                continue;
+            }
+
+            if (i == pose.StrokeIndex && pose.Along < 1 - 1e-6)
+            {
+                if (pose.Along > 1e-6)
+                    DrawNcStroke(canvas, s, 0, pose.Along, true, toSx, toSy, scale);
+                DrawNcStroke(canvas, s, pose.Along, 1, false, toSx, toSy, scale);
+                continue;
+            }
+
+            DrawNcStroke(canvas, s, 0, 1, true, toSx, toSy, scale);
+        }
+
+        if (pose.StrokeIndex < 0) return;
+        var r = Math.Max(3.2f, (float)(NcCutSim.ToolDiameterMm(pose.ToolNum) * 0.5 * scale));
+        var cx = toSx(pose.X);
+        var cy = toSy(pose.Y);
+        var fillC = pose.Rapid
+            ? new SKColor(0x88, 0x88, 0x88, 0xB0)
+            : pose.Z >= 0.25
+                ? new SKColor(0xE6, 0x7E, 0x22, 0xE0)
+                : new SKColor(0x1A, 0x6B, 0xB5, 0xE0);
+        using var fill = new SKPaint { Color = fillC, IsAntialias = true };
+        using var ring = new SKPaint
+        {
+            Color = new SKColor(0x22, 0x22, 0x22),
+            IsStroke = true,
+            StrokeWidth = 1.4f,
+            IsAntialias = true,
+        };
+        canvas.DrawCircle(cx, cy, r, fill);
+        canvas.DrawCircle(cx, cy, r, ring);
+    }
+
+    static void DrawNcStroke(
+        SKCanvas canvas,
+        ToolStroke s,
+        double a0,
+        double a1,
+        bool done,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        float scale)
+    {
+        a0 = Math.Clamp(a0, 0, 1);
+        a1 = Math.Clamp(a1, 0, 1);
+        if (a1 - a0 < 1e-6) return;
+
+        var x0 = s.X0 + s.Dx * a0;
+        var y0 = s.Y0 + s.Dy * a0;
+        var x1 = s.X0 + s.Dx * a1;
+        var y1 = s.Y0 + s.Dy * a1;
+        var kind = NcCutSim.KindOf(s);
+        var rapid = kind == NcCutSim.StrokeKind.Rapid;
+        var color = kind switch
+        {
+            NcCutSim.StrokeKind.Leave => done
+                ? new SKColor(0xE6, 0x7E, 0x22)
+                : new SKColor(0xE6, 0x7E, 0x22, 0x55),
+            NcCutSim.StrokeKind.Through => done
+                ? new SKColor(0x0B, 0x4F, 0x8C)
+                : new SKColor(0x1A, 0x6B, 0xB5, 0x55),
+            _ => done
+                ? new SKColor(0x88, 0x88, 0x88)
+                : new SKColor(0xBB, 0xBB, 0xBB, 0x90),
+        };
+        var dia = NcCutSim.ToolDiameterMm(s.ToolNum);
+        var sw = rapid
+            ? 1.15f
+            : Math.Clamp((float)(dia * scale * 0.55), 1.4f, 9f);
+
+        if (s.XyLen < 0.2)
+        {
+            if (!done) return;
+            using var tick = new SKPaint { Color = color, IsAntialias = true };
+            canvas.DrawCircle(toSx(x1), toSy(y1), Math.Max(1.8f, sw * 0.7f), tick);
+            return;
+        }
+
+        using var dash = rapid ? SKPathEffect.CreateDash([6f, 4f], 0) : null;
+        using var paint = new SKPaint
+        {
+            Color = color,
+            IsStroke = true,
+            StrokeWidth = sw,
+            IsAntialias = true,
+            StrokeCap = SKStrokeCap.Round,
+            StrokeJoin = SKStrokeJoin.Round,
+            PathEffect = dash,
+        };
+        canvas.DrawLine(toSx(x0), toSy(y0), toSx(x1), toSy(y1), paint);
+    }
+
     static void DrawHoldPreview(
         SKCanvas canvas,
         Panel panel,
@@ -907,7 +1033,7 @@ static class CanvasPainter
             OffsetY = oy,
             RotationDeg = rotDeg,
         };
-        using var path = BuildWorldPath(panel, place, pad, scale, sheetH);
+        using var path = BuildWorldPath(panel, place, pad, pad, scale, sheetH);
         var fillC = blocked
             ? new SKColor(0xCC, 0x33, 0x33, 0x55)
             : new SKColor(0x00, 0x66, 0xCC, 0x55);
@@ -952,7 +1078,8 @@ static class CanvasPainter
         }
     }
 
-    public static SKPath BuildWorldPath(Panel panel, NestPlacementMsg place, float pad, float scale, float sheetH)
+    public static SKPath BuildWorldPath(
+        Panel panel, NestPlacementMsg place, float padX, float padY, float scale, float sheetH)
     {
         var path = new SKPath();
         var first = true;
@@ -962,8 +1089,8 @@ static class CanvasPainter
             var (wx, wy) = NestTransform.ToSheet(
                 pt.X, pt.Y, bounds,
                 place.OffsetX, place.OffsetY, place.RotationDeg);
-            var x = pad + (float)wx * scale;
-            var y = pad + (sheetH - (float)wy) * scale;
+            var x = padX + (float)wx * scale;
+            var y = padY + (sheetH - (float)wy) * scale;
             if (first) { path.MoveTo(x, y); first = false; }
             else path.LineTo(x, y);
         }
@@ -992,14 +1119,14 @@ static class CanvasPainter
         }
     }
 
-    static void DrawSheetGrid(SKCanvas canvas, float pad, float scale, float sw, float sh)
+    static void DrawSheetGrid(SKCanvas canvas, float ox, float oy, float scale, float sw, float sh)
     {
         using var paint = new SKPaint { Color = new SKColor(0xE8, 0xE8, 0xE8), IsStroke = true, StrokeWidth = 1 };
         const float step = 50;
         for (float x = 0; x <= sw; x += step)
-            canvas.DrawLine(pad + x * scale, pad, pad + x * scale, pad + sh * scale, paint);
+            canvas.DrawLine(ox + x * scale, oy, ox + x * scale, oy + sh * scale, paint);
         for (float y = 0; y <= sh; y += step)
-            canvas.DrawLine(pad, pad + (sh - y) * scale, pad + sw * scale, pad + (sh - y) * scale, paint);
+            canvas.DrawLine(ox, oy + (sh - y) * scale, ox + sw * scale, oy + (sh - y) * scale, paint);
     }
 
     static void DrawOutline(SKCanvas canvas, GeomInteraction.View view, Panel panel, SKColor fill, SKColor stroke, float lw)

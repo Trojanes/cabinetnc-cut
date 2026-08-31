@@ -23,6 +23,20 @@ public static class ContourToolOffset
             if (op.Op != "contour" || op.Path is not { Count: >= 3 } path)
                 return op;
 
+            if (op.CadPath is { Count: > 0 } cad
+                && CadPath.TryOffset(
+                    cad,
+                    op.FeatureId is null ? offsetMm : -offsetMm,
+                    roundConvex: op.FeatureId is null,
+                    out var offsetCad)
+                && offsetCad.Count > 0)
+            {
+                var orientedCad = CadPath.OrientClosed(offsetCad, inner: op.FeatureId is not null);
+                var sampled = CadPath.ToPolyline(orientedCad, 0.4);
+                sampled = ClimbCut.OrientClosed(sampled, inner: op.FeatureId is not null).ToList();
+                return op with { Path = sampled, CadPath = orientedCad };
+            }
+
             // A tessellated stadium (door lock) should remain an exact stadium
             // after cutter compensation. Generic polygon inset leaves a small
             // sloped seam and undersizes both axes.

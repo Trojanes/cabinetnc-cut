@@ -126,6 +126,18 @@ public partial class MainWindow : Window
     IReadOnlyList<CamFrame> _camFrames = [];
     int _camFrameIndex;
     readonly DispatcherTimer _camTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
+    IReadOnlyList<ToolStroke> _ncSimStrokes = [];
+    double _ncSimTime;
+    double _ncSimTotal;
+    double _ncSimSpeed = 4;
+    bool _ncSimPlaying;
+    bool _syncingNcSimSlider;
+    readonly DispatcherTimer _ncSimTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
+    float _simUserScale;
+    float _simOx, _simOy;
+    bool _simPanning;
+    float _simPanStartX, _simPanStartY, _simPanOrigX, _simPanOrigY;
+    float _nestOriginX, _nestOriginY;
 
     // drag state
     string? _dragMode; // geom | nest | nestBox | label
@@ -181,6 +193,7 @@ public partial class MainWindow : Window
         RefreshWorkflowDots();
         RefreshEmptyState();
         _camTimer.Tick += (_, _) => StepCam(1);
+        _ncSimTimer.Tick += (_, _) => TickNcSim();
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewKeyUp += OnPreviewKeyUp;
         Deactivated += (_, _) => CanvasHost.InvalidateVisual();
@@ -210,6 +223,7 @@ public partial class MainWindow : Window
         {
             UsageLog.LogEvent("ui", "desktop.mainClosed");
             _camTimer.Stop();
+            StopNcSim();
             if (_hwndSource is not null)
             {
                 _hwndSource.RemoveHook(WndProc);
@@ -347,6 +361,11 @@ public partial class MainWindow : Window
         _stage = next;
         if (_stage != "ops")
             ExitBridgeModes();
+        if (_stage != "out")
+        {
+            EndSimPan();
+            StopNcSim();
+        }
         // Nest canvas only after an intentional nest run — blank until「初始密排」.
         _showNest = (_stage is "nest" or "ops" or "out") && _nest is { Ok: true };
         ApplyStageVisibility();
@@ -418,6 +437,10 @@ public partial class MainWindow : Window
         OutGcodePane.Visibility = _stage == "out" ? Visibility.Visible : Visibility.Collapsed;
         if (OutPreviewCaption is not null)
             OutPreviewCaption.Visibility = Visibility.Collapsed;
+        if (OutSimChrome is not null)
+            OutSimChrome.Visibility = _stage == "out" && _nest is { Ok: true }
+                ? Visibility.Visible
+                : Visibility.Collapsed;
 
         RememberLeftRailWidth();
         var showLeftRail = _stage is not "ops" and not "out";
@@ -682,6 +705,11 @@ public partial class MainWindow : Window
         OutExportAllBtn.IsEnabled = _exportFiles.Count > 0;
         if (OutExportKindBtn is not null)
             OutExportKindBtn.IsEnabled = ExportFilesOfSelectedKind().Count > 0;
+        var hasNest = _nest is { Ok: true, Placements.Count: > 0 };
+        if (OutExportDxfSheetBtn is not null)
+            OutExportDxfSheetBtn.IsEnabled = hasNest && CurrentDxfSheetIndex() is not null;
+        if (OutExportDxfKindBtn is not null)
+            OutExportDxfKindBtn.IsEnabled = hasNest && DxfSheetIndexesOfSelectedKind().Count > 0;
     }
 
     IReadOnlyList<ExportNcFile> ExportFilesOfSelectedKind()
@@ -822,13 +850,261 @@ public partial class MainWindow : Window
             }
         }
         if (OutPreviewCaption is not null)
-        {
-            OutPreviewCaption.Text = file?.Title ?? "";
-            OutPreviewCaption.Visibility = _stage == "out" && file is not null
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-        }
+            OutPreviewCaption.Visibility = Visibility.Collapsed;
+        LoadNcSim(file);
         CanvasHost.InvalidateVisual();
+    }
+
+    void LoadNcSim(ExportNcFile? file)
+    {
+        StopNcSim();
+        ResetSimView();
+        _ncSimTime = 0;
+        _ncSimTotal = 0;
+        _ncSimStrokes = [];
+        var text = file?.NcText;
+        if (!string.IsNullOrWhiteSpace(text) && !text.StartsWith("//", StringComparison.Ordinal))
+        {
+            try
+            {
+                _ncSimStrokes = OsaiTroyParser.Replay(text).Strokes;
+                _ncSimTotal = NcCutSim.TotalSec(_ncSimStrokes);
+            }
+            catch
+            {
+                _ncSimStrokes = [];
+                _ncSimTotal = 0;
+            }
+        }
+        UpdateOutSimChrome();
+    }
+
+    void StopNcSim()
+    {
+        _ncSimPlaying = false;
+        _ncSimTimer.Stop();
+        if (OutSimPlayBtn is not null)
+            OutSimPlayBtn.Content = "▶";
+    }
+
+    void TickNcSim()
+    {
+        if (!_ncSimPlaying || _ncSimTotal <= 0)
+        {
+            StopNcSim();
+            return;
+        }
+        _ncSimTime += _ncSimTimer.Interval.TotalSeconds * _ncSimSpeed;
+        if (_ncSimTime >= _ncSimTotal)
+        {
+            _ncSimTime = _ncSimTotal;
+            StopNcSim();
+        }
+        UpdateOutSimChrome();
+        CanvasHost.InvalidateVisual();
+    }
+
+    void OnOutSimPlayClick(object sender, RoutedEventArgs e)
+    {
+        if (_ncSimStrokes.Count == 0 || _ncSimTotal <= 0)
+            return;
+        if (_ncSimPlaying)
+        {
+            StopNcSim();
+            return;
+        }
+        if (_ncSimTime >= _ncSimTotal - 1e-6)
+            _ncSimTime = 0;
+        _ncSimPlaying = true;
+        if (OutSimPlayBtn is not null)
+            OutSimPlayBtn.Content = "❚❚";
+        _ncSimTimer.Start();
+        UpdateOutSimChrome();
+    }
+
+    void OnOutSimSpeedChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (OutSimSpeed?.SelectedItem is ComboBoxItem { Tag: string tag }
+            && double.TryParse(tag, out var speed)
+            && speed > 0)
+            _ncSimSpeed = speed;
+    }
+
+    void OnOutSimSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_syncingNcSimSlider || _ncSimTotal <= 0) return;
+        _ncSimTime = OutSimSlider.Value / 1000.0 * _ncSimTotal;
+        if (_ncSimPlaying && _ncSimTime >= _ncSimTotal)
+            StopNcSim();
+        UpdateOutSimChrome();
+        CanvasHost.InvalidateVisual();
+    }
+
+    void UpdateOutSimChrome()
+    {
+        if (OutSimChrome is null) return;
+        OutSimChrome.Visibility = _stage == "out" && _nest is { Ok: true }
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        if (OutSimTitle is not null)
+            OutSimTitle.Text = _exportSelected is { } f
+                ? $"仿真 · {f.Title}"
+                : "G-code 切割仿真";
+        if (OutSimMeta is not null)
+        {
+            if (_ncSimStrokes.Count == 0)
+            {
+                OutSimMeta.Text = _exportSelected is null
+                    ? "选择右侧程序开始仿真"
+                    : "无法解析该程序";
+            }
+            else
+            {
+                var pose = NcCutSim.At(_ncSimStrokes, _ncSimTime);
+                OutSimMeta.Text = pose.StrokeIndex < 0
+                    ? "滚轮缩放 · 中键平移 · 双击中键复位"
+                    : $"T{pose.ToolNum}  Z{pose.Z:0.##}  F{pose.Feed:0}  ·  滚轮缩放 · 中键平移";
+            }
+        }
+        if (OutSimTime is not null)
+            OutSimTime.Text = $"{FmtSimClock(_ncSimTime)} / {FmtSimClock(_ncSimTotal)}";
+        if (OutSimSlider is not null)
+        {
+            _syncingNcSimSlider = true;
+            OutSimSlider.IsEnabled = _ncSimTotal > 0;
+            OutSimSlider.Value = _ncSimTotal > 0
+                ? Math.Clamp(_ncSimTime / _ncSimTotal * 1000, 0, 1000)
+                : 0;
+            _syncingNcSimSlider = false;
+        }
+        if (OutSimPlayBtn is not null)
+        {
+            OutSimPlayBtn.IsEnabled = _ncSimTotal > 0;
+            if (!_ncSimPlaying)
+                OutSimPlayBtn.Content = "▶";
+        }
+    }
+
+    void ResetSimView()
+    {
+        _simUserScale = 0;
+        _simOx = _simOy = 0;
+        _simPanning = false;
+    }
+
+    void OnOutSimResetViewClick(object sender, RoutedEventArgs e)
+    {
+        ResetSimView();
+        CanvasHost.InvalidateVisual();
+    }
+
+    (float Scale, float Ox, float Oy) ResolveSimView(float fitScale, float pad)
+    {
+        if (_simUserScale <= 0)
+            return (fitScale, pad, pad);
+        return (_simUserScale, _simOx, _simOy);
+    }
+
+    void CommitSimView(float scale, float ox, float oy)
+    {
+        _simUserScale = scale;
+        _simOx = ox;
+        _simOy = oy;
+    }
+
+    void OnCanvasWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (_stage != "out" || !_showNest) return;
+        if (IsNestChromeClick(e.OriginalSource)) return;
+        RefreshDpi();
+        var (sx, sy) = CanvasPixelPos(e);
+        var (sw, sh, _) = ActiveSheetMetrics();
+        var pad = 56f;
+        var fit = FitNestScale(_surfaceW > 0 ? _surfaceW : (float)(CanvasHost.ActualWidth * _dpiX),
+            _surfaceH > 0 ? _surfaceH : (float)(CanvasHost.ActualHeight * _dpiY), sw, sh, pad);
+        if (fit <= 0) return;
+        var (scale, ox, oy) = ResolveSimView(fit, pad);
+        var wx = (sx - ox) / scale;
+        var wy = sh - (sy - oy) / scale;
+        var steps = e.Delta / 120.0;
+        var factor = (float)Math.Pow(1.2, steps);
+        var lo = fit * 0.05f;
+        var hi = fit * 80f;
+        var next = Math.Clamp(scale * factor, lo, hi);
+        CommitSimView(next, sx - wx * next, sy - (sh - wy) * next);
+        CanvasHost.InvalidateVisual();
+        e.Handled = true;
+    }
+
+    void OnCanvasPreviewDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        if (_stage != "out" || !_showNest) return;
+        if (IsNestChromeClick(e.OriginalSource)) return;
+        RefreshDpi();
+        var (x, y) = CanvasPixelPos(e);
+        if (e.ClickCount >= 2)
+        {
+            ResetSimView();
+            CanvasHost.InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+        BeginSimPan(x, y);
+        CanvasPane.CaptureMouse();
+        CanvasPane.Cursor = Cursors.SizeAll;
+        e.Handled = true;
+    }
+
+    void OnCanvasPreviewUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        if (!_simPanning) return;
+        EndSimPan();
+        e.Handled = true;
+    }
+
+    void BeginSimPan(float x, float y)
+    {
+        var (sw, sh, _) = ActiveSheetMetrics();
+        var pad = 56f;
+        var fit = FitNestScale(
+            _surfaceW > 0 ? _surfaceW : (float)(CanvasHost.ActualWidth * _dpiX),
+            _surfaceH > 0 ? _surfaceH : (float)(CanvasHost.ActualHeight * _dpiY),
+            sw, sh, pad);
+        var (scale, ox, oy) = ResolveSimView(fit, pad);
+        CommitSimView(scale, ox, oy);
+        _simPanning = true;
+        _simPanStartX = x;
+        _simPanStartY = y;
+        _simPanOrigX = ox;
+        _simPanOrigY = oy;
+    }
+
+    void EndSimPan()
+    {
+        if (!_simPanning) return;
+        _simPanning = false;
+        if (CanvasPane.IsMouseCaptured && _dragMode is null)
+            CanvasPane.ReleaseMouseCapture();
+        CanvasPane.Cursor = Cursors.Arrow;
+    }
+
+    static float FitNestScale(float canvasW, float canvasH, float sheetW, float sheetH, float pad)
+    {
+        if (sheetW <= 0 || sheetH <= 0) return 0;
+        var availW = Math.Max(1f, canvasW - pad);
+        var scale = Math.Min(availW / sheetW, (canvasH - 2 * pad) / sheetH) * 0.9f;
+        return scale > 0 ? scale : 0;
+    }
+
+    static string FmtSimClock(double sec)
+    {
+        if (sec < 60)
+            return $"{Math.Max(0, sec):0.0}s";
+        var m = (int)(sec / 60);
+        var s = sec - m * 60;
+        return $"{m}:{s:00.0}";
     }
 
     void RefreshEmptyState()
@@ -1701,6 +1977,26 @@ public partial class MainWindow : Window
         }
     }
 
+    IReadOnlyList<ProfileBridge> FacingBridgesForExport()
+    {
+        var paired = ProfileBridgePlanner.EnsureFacingPairs(
+            _profileBridges,
+            _opsOverlay,
+            AllSheetOutlines(),
+            LastProfileToolDiameterMm());
+        var before = _profileBridges.Count;
+        var beforePaired = _profileBridges.Count(b => b.PairId is not null);
+        var afterPaired = paired.Count(b => b.PairId is not null);
+        if (paired.Count != before || afterPaired != beforePaired)
+        {
+            _profileBridges.Clear();
+            _profileBridges.AddRange(paired);
+            RefreshBridgeCount();
+        }
+
+        return paired;
+    }
+
     PostRecipe CurrentPostRecipe()
     {
         ReadProfileFields();
@@ -1734,7 +2030,7 @@ public partial class MainWindow : Window
             GuillotinePlunge = _guillotinePlunge,
             GuillotineThroughZMm = _guillotineThrough,
             HomeXyAtEnd = _homeXyAtEnd,
-            Bridges = _enableBridges ? _profileBridges.ToList() : [],
+            Bridges = _enableBridges ? FacingBridgesForExport() : [],
         };
     }
 
@@ -4705,37 +5001,113 @@ public partial class MainWindow : Window
         return r == MessageBoxResult.Yes;
     }
 
-    void OnExportDxfClick(object sender, RoutedEventArgs e)
+    int? CurrentDxfSheetIndex()
+    {
+        if (OutFileList?.SelectedItem is ExportNcFile picked)
+            return picked.SheetIndex;
+        if (_exportSelected is not null)
+            return _exportSelected.SheetIndex;
+        if (_nest is { Ok: true, Placements.Count: > 0 })
+            return _activeNestSheet;
+        return null;
+    }
+
+    IReadOnlyList<int> DxfSheetIndexesOfSelectedKind()
+    {
+        return ExportFilesOfSelectedKind()
+            .Select(f => f.SheetIndex)
+            .Distinct()
+            .OrderBy(i => i)
+            .ToList();
+    }
+
+    string NestDxfFileName(int sheetIndex) =>
+        $"{_session.Package?.JobId ?? "nest"}_S{sheetIndex + 1}.dxf";
+
+    List<NestPlacement>? NestPlacementsForDxf()
     {
         if (_session.Package is null || _nest is not { Ok: true })
+            return null;
+        return CurrentNestPlacements();
+    }
+
+    void OnExportDxfClick(object sender, RoutedEventArgs e) => OnExportDxfSheetClick(sender, e);
+
+    void OnExportDxfSheetClick(object sender, RoutedEventArgs e)
+    {
+        var sheet = CurrentDxfSheetIndex();
+        if (sheet is null)
+        {
+            SetStatus("请先选中一张大板");
+            return;
+        }
+        WriteExportDxfSheets([sheet.Value], oneFile: true);
+    }
+
+    void OnExportDxfKindClick(object sender, RoutedEventArgs e)
+    {
+        var sheets = DxfSheetIndexesOfSelectedKind();
+        if (sheets.Count == 0)
+        {
+            SetStatus("请先选中一张该种类的大板");
+            return;
+        }
+        WriteExportDxfSheets(sheets, oneFile: sheets.Count == 1);
+    }
+
+    void WriteExportDxfSheets(IReadOnlyList<int> sheetIndexes, bool oneFile)
+    {
+        var places = NestPlacementsForDxf();
+        if (places is null || _session.Package is null)
         {
             SetStatus("无排版 — 先密排");
             return;
         }
-        if (!GuardExportPreflight()) return;
-        var dlg = new SaveFileDialog
+
+        var files = _exportFiles.Where(f => sheetIndexes.Contains(f.SheetIndex)).ToList();
+        if (files.Count > 0 && !GuardExportPreflight(files))
+            return;
+        if (files.Count == 0 && !GuardExportPreflight())
+            return;
+
+        if (oneFile)
         {
-            Filter = "DXF (*.dxf)|*.dxf|All|*.*",
-            FileName = $"{_session.Package.JobId ?? "nest"}_S1.dxf",
-            Title = "导出排版 DXF",
-        };
-        if (dlg.ShowDialog() != true) return;
-        var places = _nest.Placements.Select(p => new NestPlacement
+            var si = sheetIndexes[0];
+            var dlg = new SaveFileDialog
+            {
+                Filter = "DXF (*.dxf)|*.dxf|All|*.*",
+                FileName = NestDxfFileName(si),
+                Title = "单独导出这张大板 DXF",
+            };
+            if (dlg.ShowDialog() != true) return;
+            var dxf = NestDxfWriter.Write(_session.Package, places, si);
+            File.WriteAllText(dlg.FileName, dxf);
+            SetStatus($"已导出大板 {si + 1} DXF → {dlg.FileName}");
+            UsageLog.LogActionResult("export.dxf.sheet", new Dictionary<string, object?>
+            {
+                ["ok"] = true,
+                ["path"] = dlg.FileName,
+                ["sheetIndex"] = si,
+                ["jobId"] = _session.Package.JobId,
+            });
+            return;
+        }
+
+        var folder = new OpenFolderDialog { Title = "选择 DXF 导出目录" };
+        if (folder.ShowDialog() != true) return;
+        var dir = folder.FolderName;
+        foreach (var si in sheetIndexes)
         {
-            PanelId = p.PanelId,
-            SheetIndex = p.SheetIndex,
-            OffsetX = p.OffsetX,
-            OffsetY = p.OffsetY,
-            RotationDeg = p.RotationDeg,
-        }).ToList();
-        var dxf = NestDxfWriter.Write(_session.Package, places, sheetIndex: 0);
-        File.WriteAllText(dlg.FileName, dxf);
-        SetStatus($"已导出 DXF → {dlg.FileName}");
-        UsageLog.LogActionResult("export.dxf", new Dictionary<string, object?>
+            var dxf = NestDxfWriter.Write(_session.Package, places, si);
+            File.WriteAllText(Path.Combine(dir, NestDxfFileName(si)), dxf);
+        }
+        SetStatus($"已按种类导出 {sheetIndexes.Count} 张大板 DXF → {dir}");
+        UsageLog.LogActionResult("export.dxf.kind", new Dictionary<string, object?>
         {
             ["ok"] = true,
-            ["path"] = dlg.FileName,
-            ["placementCount"] = places.Count,
+            ["count"] = sheetIndexes.Count,
+            ["dir"] = dir,
+            ["sheets"] = sheetIndexes.Select(i => i + 1).ToArray(),
             ["jobId"] = _session.Package.JobId,
         });
     }
@@ -5019,7 +5391,7 @@ public partial class MainWindow : Window
         if (source is not DependencyObject d) return false;
         while (d is not null)
         {
-            if (d is FrameworkElement { Name: "NestCanvasChrome" or "NestSheetPrevBtn" or "NestSheetNextBtn" })
+            if (d is FrameworkElement { Name: "NestCanvasChrome" or "NestSheetPrevBtn" or "NestSheetNextBtn" or "OutSimChrome" })
                 return true;
             if (d is System.Windows.Controls.Primitives.ButtonBase)
                 return true;
@@ -5243,6 +5615,14 @@ public partial class MainWindow : Window
     void OnCanvasMove(object sender, MouseEventArgs e)
     {
         var (x, y) = CanvasPixelPos(e);
+
+        if (_simPanning)
+        {
+            CommitSimView(_simUserScale, _simPanOrigX + (x - _simPanStartX), _simPanOrigY + (y - _simPanStartY));
+            CanvasHost.InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
 
         // hover cursor when not dragging
         if (_dragMode is null)
@@ -5867,6 +6247,14 @@ public partial class MainWindow : Window
 
     void OnCanvasLostCapture(object sender, MouseEventArgs e)
     {
+        if (_simPanning && e.MiddleButton == MouseButtonState.Pressed)
+        {
+            if (!CanvasPane.IsMouseCaptured)
+                CanvasPane.CaptureMouse();
+            return;
+        }
+        if (_simPanning)
+            EndSimPan();
         if (Mouse.LeftButton == MouseButtonState.Pressed && _dragMode is not null)
         {
             if (!CanvasPane.IsMouseCaptured)
@@ -6307,10 +6695,10 @@ public partial class MainWindow : Window
     bool ScreenOverNestSheet(float sx, float sy)
     {
         if (_nestScale <= 0) return false;
-        var left = _nestPad;
-        var top = _nestPad;
-        var right = _nestPad + _nestSheetW * _nestScale;
-        var bottom = _nestPad + _nestSheetH * _nestScale;
+        var left = _nestOriginX;
+        var top = _nestOriginY;
+        var right = _nestOriginX + _nestSheetW * _nestScale;
+        var bottom = _nestOriginY + _nestSheetH * _nestScale;
         return sx >= left && sx <= right && sy >= top && sy <= bottom;
     }
 
@@ -6337,6 +6725,8 @@ public partial class MainWindow : Window
         if (scale <= 0) return;
         _nestPad = pad;
         _nestScale = scale;
+        _nestOriginX = pad;
+        _nestOriginY = pad;
         _nestSheetW = sw;
         _nestSheetH = sh;
         _holdingBayLeft = bay > 0 ? w - bay : 0;
@@ -6419,8 +6809,10 @@ public partial class MainWindow : Window
     (double Mx, double My) ScreenToSheet(float sx, float sy)
     {
         if (_nestScale <= 0) return (0, 0);
-        var mx = (sx - _nestPad) / _nestScale;
-        var my = _nestSheetH - (sy - _nestPad) / _nestScale;
+        var ox = _nestOriginX;
+        var oy = _nestOriginY;
+        var mx = (sx - ox) / _nestScale;
+        var my = _nestSheetH - (sy - oy) / _nestScale;
         return (mx, my);
     }
 
@@ -6460,12 +6852,24 @@ public partial class MainWindow : Window
         {
             var (sw, sh, _) = ActiveSheetMetrics();
             var bay = _stage == "nest" ? CanvasPainter.NestHoldingBayWidth : 0f;
-            var pad = 44f;
+            var pad = _stage == "out" ? 56f : 44f;
             var availW = Math.Max(1f, e.Info.Width - bay - pad);
-            var scale = Math.Min(availW / sw, (e.Info.Height - 2 * pad) / sh) * 0.9f;
-            if (scale <= 0) return;
+            var fitScale = Math.Min(availW / sw, (e.Info.Height - 2 * pad) / sh) * 0.9f;
+            if (fitScale <= 0) return;
+            var scale = fitScale;
+            var ox = pad;
+            var oy = pad;
+            if (_stage == "out")
+            {
+                var view = ResolveSimView(fitScale, pad);
+                scale = view.Scale;
+                ox = view.Ox;
+                oy = view.Oy;
+            }
             _nestPad = pad;
             _nestScale = scale;
+            _nestOriginX = ox;
+            _nestOriginY = oy;
             _nestSheetW = sw;
             _nestSheetH = sh;
             _holdingBayLeft = bay > 0 ? e.Info.Width - bay : 0;
@@ -6552,8 +6956,8 @@ public partial class MainWindow : Window
                     _stage == "out" ? null : _selected?.PanelId,
                     _locked,
                     CurrentConflicts(),
-                    _stage == "out" ? (_exportSelected?.Ops ?? []) : _opsOverlay,
-                    ShowOps: _stage is "ops" or "out",
+                    _stage == "ops" ? _opsOverlay : null,
+                    ShowOps: _stage == "ops",
                     ActiveCamFrame: _stage == "ops" && _camFrames.Count > 0
                         ? _camFrames[_camFrameIndex]
                         : null,
@@ -6578,9 +6982,14 @@ public partial class MainWindow : Window
                         && NestDrag.IsCrossingSelect(_nestBoxX0, _nestBoxX1),
                     HighlightPass: _stage == "out" ? null : _opsFocus,
                     HighlightStrategy: _stage == "out" ? null : _opsStrategy,
-                    Bridges: _profileBridges,
+                    Bridges: _stage == "out" ? null : _profileBridges,
                     LabelOverrides: CurrentLabelOverrides(),
-                    LitePaint: _dragMode is "nest" or "label" or "nestBox"));
+                    LitePaint: _stage == "out" || _dragMode is "nest" or "label" or "nestBox",
+                    NcSimStrokes: _stage == "out" ? _ncSimStrokes : null,
+                    NcSimTimeSec: _ncSimTime,
+                    FaintParts: _stage == "out",
+                    OriginX: ox,
+                    OriginY: oy));
             return;
         }
 

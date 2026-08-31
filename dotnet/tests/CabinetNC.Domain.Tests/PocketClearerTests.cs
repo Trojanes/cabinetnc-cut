@@ -173,5 +173,11 @@ public class PocketClearerTests
             Assert.Equal(loop[0].X, loop[^1].X, 6);
             Assert.Equal(loop[0].Y, loop[^1].Y, 6);
         });
+        var outerEnd = result.Segments[0][^1];
+        var innerStart = result.Segments[1][0];
+        var dx = innerStart.X - outerEnd.X;
+        var dy = innerStart.Y - outerEnd.Y;
+        var link = Math.Sqrt(dx * dx + dy * dy);
+        Assert.True(link < 15, $"stay-down link {link:0.###} mm should stay in the rebate band");
     }
 }

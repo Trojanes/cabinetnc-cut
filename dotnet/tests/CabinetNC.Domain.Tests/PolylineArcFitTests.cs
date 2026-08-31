@@ -296,6 +296,37 @@ public class NcEmitterTroyArcTests
         Assert.DoesNotContain(segs, s => s.Arc && s.R > 8 && s.R < 40);
         var nc = NcEmitter.OpsToNc(offset, Machine(), recipe: PostRecipe.TroyDefault());
         Assert.DoesNotContain("R21.", nc);
+        Assert.DoesNotContain("R20.", nc);
+        Assert.Contains("R5.0000", nc);
+    }
+
+    [Fact]
+    public void Wide_shallow_notch_exit_is_not_r20_fillet()
+    {
+        // _04.anc N18–N21 / _18.anc N173–N176: 80×20 notch, G2 R20.7752
+        // between two R5 corners (below the old 21.58 shop-fillet cap).
+        var source = new CutOp
+        {
+            Op = "contour",
+            PanelId = "FRAME",
+            ToolId = "T2",
+            Placed = true,
+            ClosePath = true,
+            Through = true,
+            ThicknessMm = 18,
+            DepthMm = 18.5,
+            Path =
+            [
+                (0, 0), (400, 0), (400, 200),
+                (250, 200), (250, 180), (170, 180), (170, 200),
+                (0, 200),
+            ],
+        };
+        var offset = ContourToolOffset.Apply([source], 5);
+        var segs = PolylineArcFit.Fit(offset[0].Path!, closed: true);
+        Assert.DoesNotContain(segs, s => s.Arc && s.R > 8 && s.R < 40);
+        var nc = NcEmitter.OpsToNc(offset, Machine(), recipe: PostRecipe.TroyDefault());
+        Assert.DoesNotContain("R20.", nc);
         Assert.Contains("R5.0000", nc);
     }
 

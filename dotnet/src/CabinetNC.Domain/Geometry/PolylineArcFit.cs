@@ -10,9 +10,12 @@ public static class PolylineArcFit
 {
     public const double PointTolMm = 0.05;
     public const double MinRadiusMm = 0.5;
-    /// <summary>Shop snap fillets (≤21.58). R just above this (e.g. 21.96 on a
-    /// rectangular notch) is a false bow, not a fillet.</summary>
-    public const double MaxRadiusMm = 21.58;
+    /// <summary>
+    /// Shop snap fillets through finger-hole R15. A 20 mm rectangular notch
+    /// exit fits G2 R20.8 / R21.96 — that is not a fillet; it must pass the
+    /// large-corner gate (≈90°, R22–80) or stay G1.
+    /// </summary>
+    public const double MaxRadiusMm = 16;
     /// <summary>Lounge lid / opening corners are R48.5–R55 at the tool centre.</summary>
     public const double MaxCornerRadiusMm = 80;
     /// <summary>

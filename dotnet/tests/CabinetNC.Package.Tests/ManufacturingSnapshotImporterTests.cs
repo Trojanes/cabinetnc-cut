@@ -37,6 +37,55 @@ public class ManufacturingSnapshotImporterTests
     }
 
     [Fact]
+    public void Imports_exact_outline_cad_segments()
+    {
+        var json = """
+        {
+          "schema":"cabinetnc.manufacturing-snapshot",
+          "schemaVersion":"1.0.0",
+          "jobId":"CAD-SEGS",
+          "units":"mm",
+          "workpieces":[
+            {
+              "workpieceId":"WP1",
+              "panelId":"P1",
+              "material":{"materialId":"PB-WHITE-18","thicknessMm":18},
+              "geometry":{
+                "quality":"exact",
+                "outerProfile":{
+                  "closed":true,
+                  "points":[[0,0],[100,0],[100,50],[0,50]],
+                  "segments":[
+                    {"type":"line","start":[0,0],"end":[100,0]},
+                    {"type":"line","start":[100,0],"end":[100,50]},
+                    {"type":"arc","start":[100,50],"end":[0,50],"center":[50,50],"radiusMm":50,"cw":true},
+                    {"type":"line","start":[0,50],"end":[0,0]}
+                  ]
+                }
+              },
+              "faces":[{"faceId":"A","machiningPermission":"PRIMARY"}],
+              "features":[],
+              "manufacturing":{"mode":"singleSide","machiningFace":"A"}
+            }
+          ]
+        }
+        """;
+
+        var result = ManufacturingSnapshotImporter.FromJson(json);
+        Assert.True(result.Ok, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var segs = result.Package!.Panels[0].Outline.Segments;
+        Assert.NotNull(segs);
+        Assert.Equal(4, segs!.Count);
+        Assert.Equal("arc", segs[2].Type);
+        Assert.Equal(50, segs[2].RadiusMm);
+        Assert.True(segs[2].Cw);
+        var ops = OpsPlanner.FeaturesToOps(result.Package.Panels);
+        var contour = Assert.Single(ops, o => o.Op == "contour");
+        Assert.NotNull(contour.CadPath);
+        Assert.Equal(4, contour.CadPath!.Count);
+    }
+
+    [Fact]
     public void Imports_rebate_pocket_holes_as_ring()
     {
         var json = SnapshotJson(

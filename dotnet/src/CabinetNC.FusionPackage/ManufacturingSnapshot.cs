@@ -84,6 +84,17 @@ public sealed class SnapshotProfile
 {
     public bool Closed { get; init; } = true;
     public List<List<double>> Points { get; init; } = [];
+    public List<SnapshotSegment> Segments { get; init; } = [];
+}
+
+public sealed class SnapshotSegment
+{
+    public string Type { get; init; } = "line";
+    public List<double> Start { get; init; } = [];
+    public List<double> End { get; init; } = [];
+    public List<double>? Center { get; init; }
+    public double? RadiusMm { get; init; }
+    public bool Cw { get; init; }
 }
 
 public sealed class SnapshotFace

@@ -413,6 +413,9 @@
                     PreviewMouseLeftButtonUp="OnCanvasUp"
                     PreviewMouseRightButtonDown="OnCanvasRightDown"
                     PreviewMouseRightButtonUp="OnCanvasRightUp"
+                    PreviewMouseDown="OnCanvasPreviewDown"
+                    PreviewMouseUp="OnCanvasPreviewUp"
+                    PreviewMouseWheel="OnCanvasWheel"
                     LostMouseCapture="OnCanvasLostCapture">
               <Grid>
                 <skia:SKElement x:Name="CanvasHost" PaintSurface="OnPaintSurface" />
@@ -437,6 +440,40 @@
                       <TextBlock Text="右侧=待用区" Foreground="#666" FontSize="11" Margin="0,0,10,0" />
                       <TextBlock Text="间距按板材种类" Foreground="#666" FontSize="11" />
                     </WrapPanel>
+                  </Border>
+                </Grid>
+                <Grid x:Name="OutSimChrome" Visibility="Collapsed">
+                  <Border VerticalAlignment="Top" Background="#F7F7F7" BorderBrush="#DDDDDD" BorderThickness="0,0,0,1" Padding="8,5">
+                    <Grid>
+                      <TextBlock x:Name="OutSimTitle" Text="G-code 切割仿真" VerticalAlignment="Center"
+                                 FontSize="12" FontWeight="SemiBold" />
+                      <TextBlock x:Name="OutSimMeta" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                 FontSize="11" Foreground="#666"
+                                 Text="虚线空程 · 橙=留 0.5 · 蓝=通切" />
+                    </Grid>
+                  </Border>
+                  <Border VerticalAlignment="Bottom" Background="#F7F7F7" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0" Padding="8,6">
+                    <DockPanel>
+                      <Button x:Name="OutSimPlayBtn" Content="▶" Click="OnOutSimPlayClick"
+                              Padding="12,2" DockPanel.Dock="Left" Margin="0,0,8,0"
+                              ToolTip="播放 / 暂停" />
+                      <Button Content="复位" Click="OnOutSimResetViewClick"
+                              Padding="8,2" DockPanel.Dock="Left" Margin="0,0,8,0"
+                              ToolTip="双击中键同样复位 · 滚轮对准指针缩放 · 中键平移" />
+                      <ComboBox x:Name="OutSimSpeed" Width="68" DockPanel.Dock="Right"
+                                Margin="8,0,0,0" VerticalAlignment="Center"
+                                SelectedIndex="1" SelectionChanged="OnOutSimSpeedChanged">
+                        <ComboBoxItem Content="1×" Tag="1" />
+                        <ComboBoxItem Content="4×" Tag="4" />
+                        <ComboBoxItem Content="16×" Tag="16" />
+                      </ComboBox>
+                      <TextBlock x:Name="OutSimTime" DockPanel.Dock="Right" VerticalAlignment="Center"
+                                 FontSize="11" Foreground="#555" Margin="10,0,0,0" MinWidth="88"
+                                 Text="0.0 / 0.0 s" />
+                      <Slider x:Name="OutSimSlider" Minimum="0" Maximum="1000" Value="0"
+                              VerticalAlignment="Center" Margin="0,2"
+                              ValueChanged="OnOutSimSliderChanged" />
+                    </DockPanel>
                   </Border>
                 </Grid>
                 <TextBlock x:Name="OutPreviewCaption" Visibility="Collapsed" IsHitTestVisible="False"
@@ -974,7 +1011,15 @@
                           Padding="8,6" Margin="0,0,0,6" IsEnabled="False"
                           ToolTip="导出选中文件同一板材种类的全部大板，例如全部 15mm 匣体" />
                   <Button x:Name="OutExportAllBtn" Content="导出全部" Click="OnExportAllClick"
-                          Padding="8,6" IsEnabled="False" />
+                          Padding="8,6" Margin="0,0,0,10" IsEnabled="False" />
+                  <Button x:Name="OutExportDxfSheetBtn" Content="单独导出这张大板 DXF"
+                          Click="OnExportDxfSheetClick"
+                          Padding="8,6" Margin="0,0,0,6" IsEnabled="False"
+                          ToolTip="把当前选中的大板排版写成一份 DXF，给 Carveco 演算" />
+                  <Button x:Name="OutExportDxfKindBtn" Content="按照种类导出 DXF"
+                          Click="OnExportDxfKindClick"
+                          Padding="8,6" IsEnabled="False"
+                          ToolTip="同一板材种类的每张大板各一份 DXF" />
                 </StackPanel>
                 <ListBox x:Name="OutFileList" BorderThickness="0" Background="Transparent"
                          Padding="6,0,6,8" FontSize="12"
