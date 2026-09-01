@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using CabinetNC.Domain;
 using CabinetNC.Domain.Geometry;
+using CabinetNC.Domain.Nesting;
 using CabinetNC.Domain.Parts;
 
 public static class ManufacturingSnapshotImporter
@@ -316,6 +317,8 @@ public static class ManufacturingSnapshotImporter
 
         if (errors.Count > initialErrorCount) return null;
 
+        var grain = ResolvePartGrain(workpiece, outline);
+
         return new Panel
         {
             PanelId = panelId!,
@@ -346,10 +349,12 @@ public static class ManufacturingSnapshotImporter
                 Role = NullIfEmpty(workpiece.Identity.Role),
                 SourceFormat = ManufacturingSnapshot.SchemaName,
             },
+            GrainDirection = grain,
             Orientation = new WorkpieceOrientation
             {
                 PrimaryFace = "A",
                 MillingFace = "A",
+                GrainDirection = grain,
                 AllowMirror = false,
             },
             Side = "A",
@@ -359,6 +364,29 @@ public static class ManufacturingSnapshotImporter
 
     static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    static string? ResolvePartGrain(SnapshotWorkpiece workpiece, IReadOnlyList<Point2> outline)
+    {
+        var width = 0d;
+        var height = 0d;
+        if (outline.Count > 0)
+        {
+            var minX = outline.Min(p => p.X);
+            var maxX = outline.Max(p => p.X);
+            var minY = outline.Min(p => p.Y);
+            var maxY = outline.Max(p => p.Y);
+            width = maxX - minX;
+            height = maxY - minY;
+        }
+
+        return GrainAlign.FromFusion(
+            NullIfEmpty(workpiece.GrainDirection)
+                ?? NullIfEmpty(workpiece.Manufacturing?.GrainDirection),
+            workpiece.Material.GrainAngleDeg,
+            workpiece.Material.GrainAlongMm,
+            width,
+            height);
+    }
 
     /// <summary>
     /// Fusion currently emits through cutouts as features; if <c>innerProfiles</c>

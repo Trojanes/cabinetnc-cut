@@ -121,6 +121,12 @@
     </Style>
     <ContextMenu x:Key="NestPartContextMenu">
       <MenuItem Header="改变材料" Click="OnNestChangeMaterialClick" />
+      <MenuItem Header="改变纹路朝向 90°" Click="OnNestRotateGrainClick" />
+    </ContextMenu>
+    <ContextMenu x:Key="NestHoldContextMenu">
+      <MenuItem Header="改变纹路朝向 90°" Click="OnNestRotateGrainClick" />
+      <MenuItem Header="复制" Click="OnNestHoldCopyClick" />
+      <MenuItem Header="删除" Click="OnNestHoldDeleteClick" />
     </ContextMenu>
   </Window.Resources>
 
@@ -295,12 +301,13 @@
                             Content="创建板件" Click="OnCreatePanelClick"
                             Padding="8,2" Margin="0" FontSize="11"
                             Visibility="Collapsed"
-                            ToolTip="打开 AutoCAD 风格画布创建新板件。需先载入方案。" />
+                            ToolTip="打开画布。已选板则载入该板，未选则新建。Profile=外框，Feature=孔/槽/口袋。" />
                     <TextBlock Text="板件" Style="{StaticResource RailH2}"
                                Margin="0" VerticalAlignment="Center" />
                   </DockPanel>
                   <ListBox x:Name="PartList" BorderThickness="0" Background="Transparent" SelectionChanged="OnPartSelected" FontSize="12"
-                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                           ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                           MouseDoubleClick="OnPartListDoubleClick">
                     <ListBox.GroupStyle>
                       <GroupStyle>
                         <GroupStyle.ContainerStyle>
@@ -398,6 +405,7 @@
                         <MenuItem Header="复制 (Ctrl+C)" Click="OnGeomDuplicateClick" />
                         <MenuItem Header="粘贴 (Ctrl+V)" Click="OnPastePanelClick" />
                         <MenuItem Header="剪切 (Ctrl+X)" Click="OnCutPanelClick" />
+                        <MenuItem Header="创建板件" Click="OnCreatePanelClick" />
                         <MenuItem Header="删除整板 (Del)" Click="OnDeletePanelClick" />
                         <Separator />
                         <MenuItem Header="镜像 X" Click="OnGeomMirrorXClick" />
@@ -448,6 +456,11 @@
                                  FontSize="11" Foreground="#666" Text="" />
                     </Grid>
                   </Border>
+                  <Button x:Name="NestCreatePanelBtn" Content="创建板件"
+                          Click="OnNestCreatePanelClick"
+                          HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                          Margin="12,0,0,36" Padding="12,6" FontWeight="SemiBold"
+                          ToolTip="按当前大板材料创建，完成后进入右侧待用区" />
                   <Border VerticalAlignment="Bottom" Background="#F7F7F7" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0" Padding="8,4">
                     <WrapPanel>
                       <TextBlock Text="选中" Foreground="#0066CC" FontSize="11" Margin="0,0,10,0" />
@@ -658,6 +671,38 @@
                             </Grid>
                             <CheckBox Content="允许90度旋转" IsChecked="{Binding AllowRotate90}"
                                       Margin="0,8,0,2" FontSize="12" />
+                            <TextBlock Text="大板木纹" FontSize="10" Foreground="#666" Margin="0,6,0,0" />
+                            <ComboBox ItemsSource="{Binding SheetGrainChoices}"
+                                      DisplayMemberPath="Label"
+                                      SelectedValuePath="Key"
+                                      SelectedValue="{Binding SheetGrainKey, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,0,0,6"
+                                      SelectionChanged="OnStockSheetGrainChanged"
+                                      ToolTip="Fusion 设定板件木纹；这里设大板纹理方向。无纹理则不强制对齐。" />
+                            <Expander Header="{Binding PanelGrainHeader}"
+                                      IsExpanded="{Binding PanelGrainsExpanded, Mode=TwoWay}"
+                                      Margin="0,2,0,6"
+                                      FontSize="12"
+                                      ToolTip="默认收起。点开后可改单块板的木纹。">
+                              <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
+                                <ItemsControl ItemsSource="{Binding PanelGrains}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                      <DockPanel Margin="0,0,0,3" LastChildFill="True">
+                                        <ComboBox DockPanel.Dock="Right" Width="64" Margin="8,0,0,0"
+                                                  ItemsSource="{Binding GrainChoices}"
+                                                  DisplayMemberPath="Label"
+                                                  SelectedValuePath="Key"
+                                                  SelectedValue="{Binding GrainKey, UpdateSourceTrigger=PropertyChanged}"
+                                                  SelectionChanged="OnStockPanelGrainChanged" />
+                                        <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" FontSize="12" />
+                                      </DockPanel>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                              </ScrollViewer>
+                            </Expander>
                             <CheckBox Content="允许 parts in part" IsChecked="{Binding AllowPartsInPart}"
                                       Margin="0,0,0,2" FontSize="12"
                                       ToolTip="零件嵌套进另一零件的空洞（引擎预留；勾选后写入本材料密排参数）" />

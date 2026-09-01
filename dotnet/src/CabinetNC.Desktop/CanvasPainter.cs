@@ -127,8 +127,12 @@ static class CanvasPainter
             }
         }
 
+        DrawGeomGrain(canvas, view, panel, box);
+
+        var grain = GrainAlign.NormalizePart(panel.GrainDirection ?? panel.Orientation?.GrainDirection);
         DrawText(canvas, panel.DisplayTitle, 10, 18, 13, new SKColor(0x22, 0x22, 0x22), bold: true);
-        DrawText(canvas, hoverHint ?? "Geom · 拖孔/槽端点/边手柄", 10, 36, 11, new SKColor(0x55, 0x55, 0x55));
+        var hint = hoverHint ?? "Geom · 拖孔/槽端点/边手柄";
+        DrawText(canvas, grain is null ? hint : $"{hint} · 木纹 {grain}", 10, 36, 11, new SKColor(0x55, 0x55, 0x55));
     }
 
     public readonly record struct NestHoldingItem(
@@ -192,7 +196,8 @@ static class CanvasPainter
         bool FaintParts = false,
         float? OriginX = null,
         float? OriginY = null,
-        IReadOnlyDictionary<int, double>? NcSimToolDiaMm = null);
+        IReadOnlyDictionary<int, double>? NcSimToolDiaMm = null,
+        SheetGrainKind SheetGrain = SheetGrainKind.None);
 
     public static void PaintNest(
         SKCanvas canvas,
@@ -222,6 +227,8 @@ static class CanvasPainter
             DrawSheetGrid(canvas, ox, oy, scale, sw, sh);
             canvas.DrawRect(ox, oy, sw * scale, sh * scale, stroke);
         }
+        if (opts.SheetGrain != SheetGrainKind.None)
+            DrawSheetGrain(canvas, ToSx, ToSy, sw, sh, opts.SheetGrain);
 
         DrawDimHScreen(canvas, ToSx(0), ToSx(sw), ToSy(sh) - 14, Fmt(sw));
         DrawDimVScreen(canvas, ToSy(0), ToSy(sh), ToSx(0) - 8, Fmt(sh));
@@ -262,6 +269,8 @@ static class CanvasPainter
             using var stroke = new SKPaint { Color = strokeC, IsStroke = true, StrokeWidth = lw, IsAntialias = true };
             canvas.DrawPath(path, fill);
             canvas.DrawPath(path, stroke);
+            if (!opts.LitePaint && !opts.FaintParts)
+                DrawPartGrain(canvas, panel, place, ToSx, ToSy, scale);
 
             // features on nest
             if (!opts.LitePaint)
@@ -1470,6 +1479,153 @@ static class CanvasPainter
         };
         canvas.DrawRect(x0, y0, w, h, fillPaint);
         canvas.DrawRect(x0, y0, w, h, strokePaint);
+    }
+
+    static void DrawSheetGrain(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        float sw,
+        float sh,
+        SheetGrainKind grain)
+    {
+        var alongY = grain == SheetGrainKind.AlongLength;
+        using var paint = new SKPaint
+        {
+            Color = new SKColor(0x8A, 0x6A, 0x2B, 0x70),
+            IsStroke = true,
+            StrokeWidth = 1.2f,
+            IsAntialias = true,
+            StrokeCap = SKStrokeCap.Round,
+        };
+        const int n = 5;
+        for (var i = 1; i <= n; i++)
+        {
+            if (alongY)
+            {
+                var x = sw * i / (n + 1);
+                canvas.DrawLine(toSx(x), toSy(sh * 0.12), toSx(x), toSy(sh * 0.88), paint);
+            }
+            else
+            {
+                var y = sh * i / (n + 1);
+                canvas.DrawLine(toSx(sw * 0.12), toSy(y), toSx(sw * 0.88), toSy(y), paint);
+            }
+        }
+    }
+
+    static void DrawGeomGrain(
+        SKCanvas canvas,
+        GeomInteraction.View view,
+        Panel panel,
+        (double MinX, double MinY, double MaxX, double MaxY, double W, double H) box)
+    {
+        var grain = GrainAlign.NormalizePart(panel.GrainDirection ?? panel.Orientation?.GrainDirection);
+        if (grain is null) return;
+        var alongX = grain == "X";
+        var nx = alongX ? 1d : 0d;
+        var ny = alongX ? 0d : 1d;
+        var axis = alongX ? box.W : box.H;
+        var half = Math.Max(12, axis * 0.38);
+        DrawSlenderGrainArrow(
+            canvas,
+            x => GeomInteraction.ToScreen(view, x, box.MinY).Sx,
+            y => GeomInteraction.ToScreen(view, box.MinX, y).Sy,
+            (box.MinX + box.MaxX) * 0.5,
+            (box.MinY + box.MaxY) * 0.5,
+            nx, ny, half,
+            strokePx: 1.6f,
+            tipMm: Math.Clamp(axis * 0.06, 10, 22));
+    }
+
+    static void DrawPartGrain(
+        SKCanvas canvas,
+        Panel panel,
+        NestPlacementMsg place,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        float scale)
+    {
+        var part = GrainAlign.NormalizePart(panel.GrainDirection ?? panel.Orientation?.GrainDirection);
+        var axis = GrainAlign.WorldAxis(part, place.RotationDeg);
+        if (axis is null) return;
+        var bounds = NestTransform.BoundsOf(panel);
+        var cx = (bounds.MinX + bounds.MaxX) * 0.5;
+        var cy = (bounds.MinY + bounds.MaxY) * 0.5;
+        var (wx, wy) = NestTransform.ToSheet(
+            cx, cy, bounds, place.OffsetX, place.OffsetY, place.RotationDeg);
+        var along = part == "X" ? bounds.MaxX - bounds.MinX : bounds.MaxY - bounds.MinY;
+        var half = Math.Max(10, along * 0.38);
+        var nx = axis.Value.X;
+        var ny = axis.Value.Y;
+        var len = Math.Sqrt(nx * nx + ny * ny);
+        if (len < 1e-9) return;
+        nx /= len;
+        ny /= len;
+        DrawSlenderGrainArrow(
+            canvas, toSx, toSy, wx, wy, nx, ny, half,
+            strokePx: Math.Clamp(0.9f * scale / 6f, 0.85f, 1.25f),
+            tipMm: Math.Clamp(along * 0.055, 7, 16));
+    }
+
+    static void DrawSlenderGrainArrow(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        double cx,
+        double cy,
+        double nx,
+        double ny,
+        double halfSpanMm,
+        float strokePx,
+        double tipMm)
+    {
+        var x0 = cx - nx * halfSpanMm;
+        var y0 = cy - ny * halfSpanMm;
+        var x1 = cx + nx * halfSpanMm;
+        var y1 = cy + ny * halfSpanMm;
+        var color = new SKColor(0x8A, 0x42, 0x08, 0xE6);
+        using var paint = new SKPaint
+        {
+            Color = color,
+            IsStroke = true,
+            StrokeWidth = strokePx,
+            IsAntialias = true,
+            StrokeCap = SKStrokeCap.Round,
+        };
+        canvas.DrawLine(toSx(x0), toSy(y0), toSx(x1), toSy(y1), paint);
+        DrawGrainTip(canvas, toSx, toSy, x1, y1, nx, ny, tipMm, strokePx, color);
+        DrawGrainTip(canvas, toSx, toSy, x0, y0, -nx, -ny, tipMm, strokePx, color);
+    }
+
+    static void DrawGrainTip(
+        SKCanvas canvas,
+        Func<double, float> toSx,
+        Func<double, float> toSy,
+        double x,
+        double y,
+        double nx,
+        double ny,
+        double size,
+        float strokePx,
+        SKColor color)
+    {
+        var px = -ny;
+        var py = nx;
+        var ax = x - nx * size + px * size * 0.26;
+        var ay = y - ny * size + py * size * 0.26;
+        var bx = x - nx * size - px * size * 0.26;
+        var by = y - ny * size - py * size * 0.26;
+        using var paint = new SKPaint
+        {
+            Color = color,
+            IsStroke = true,
+            StrokeWidth = strokePx,
+            IsAntialias = true,
+            StrokeCap = SKStrokeCap.Round,
+        };
+        canvas.DrawLine(toSx(x), toSy(y), toSx(ax), toSy(ay), paint);
+        canvas.DrawLine(toSx(x), toSy(y), toSx(bx), toSy(by), paint);
     }
 
     static void DrawHandle(SKCanvas canvas, float x, float y, SKColor color)

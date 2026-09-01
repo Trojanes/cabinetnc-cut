@@ -90,4 +90,26 @@ public class ProjectSessionEditTests
         Assert.True(s.TryRemovePackage("Kitchen"));
         Assert.Null(s.Package);
     }
+
+    [Fact]
+    public void ReplacePanel_adds_drafted_panel_with_new_id()
+    {
+        var s = SessionWithPanel();
+        var id = s.NextDraftPanelId();
+        Assert.Equal("DRAFT-1", id);
+        var built = PanelDraftCompile.TryBuild(
+            [new DraftFigure
+            {
+                Layer = DraftLayer.Profile,
+                Closed = true,
+                Points = [new(0, 0), new(120, 0), new(120, 80), new(0, 80)],
+            }],
+            new DraftPanelRequest { PanelId = id, Name = "补板", Material = "oak", ThicknessMm = 18 });
+        Assert.True(built.Ok && built.Panel is not null);
+        s.ReplacePanel(built.Panel);
+        Assert.Equal(2, s.Package!.Panels.Count);
+        Assert.Contains(s.Package.Panels, p => p.PanelId == "DRAFT-1");
+        Assert.Equal("DRAFT-2", s.NextDraftPanelId());
+        Assert.True(s.ManufacturingDirty);
+    }
 }

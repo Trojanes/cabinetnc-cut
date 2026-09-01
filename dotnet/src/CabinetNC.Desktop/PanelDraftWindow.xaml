@@ -38,6 +38,16 @@
         </Setter.Value>
       </Setter>
     </Style>
+    <Style x:Key="CadCombo" TargetType="ComboBox">
+      <Setter Property="Background" Value="#1A1A1A" />
+      <Setter Property="Foreground" Value="#E8E8E8" />
+      <Setter Property="BorderBrush" Value="#3A3A3A" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="4,2" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="IsEditable" Value="False" />
+    </Style>
     <Style x:Key="CadBarBtn" TargetType="Button">
       <Setter Property="Background" Value="#2A2A2A" />
       <Setter Property="Foreground" Value="#D0D0D0" />
@@ -118,8 +128,25 @@
   <DockPanel>
     <Border DockPanel.Dock="Top" Background="#2B2B2B" BorderBrush="#111111" BorderThickness="0,0,0,1" Padding="10,6">
       <DockPanel>
-        <Button DockPanel.Dock="Right" Content="关闭" Style="{StaticResource CadBarBtn}"
-                Click="OnCloseClick" Margin="0" />
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <TextBlock Text="编号" Foreground="#8A8A8A" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0" />
+          <TextBox x:Name="DraftIdBox" Width="96" Margin="0,0,10,0" Padding="4,2"
+                   Background="#1A1A1A" Foreground="#E8E8E8" BorderBrush="#3A3A3A"
+                   CaretBrush="#E8C84A" FontFamily="Consolas" FontSize="12" />
+          <TextBlock Text="名称" Foreground="#8A8A8A" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0" />
+          <TextBox x:Name="DraftNameBox" Width="120" Margin="0,0,10,0" Padding="4,2"
+                   Background="#1A1A1A" Foreground="#E8E8E8" BorderBrush="#3A3A3A"
+                   CaretBrush="#E8C84A" FontSize="12" />
+          <TextBlock Text="板材" Foreground="#8A8A8A" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0" />
+          <ComboBox x:Name="DraftKindCombo" Width="220" Margin="0,0,12,0"
+                    Style="{StaticResource CadCombo}"
+                    DisplayMemberPath="Label"
+                    ToolTip="方案里已有的材料种类（含厚度）" />
+          <Button x:Name="CommitBtn" Content="加入方案" Style="{StaticResource CadBarBtn}"
+                  Click="OnCommitClick" Margin="0,0,8,0" FontWeight="SemiBold" />
+          <Button Content="关闭" Style="{StaticResource CadBarBtn}"
+                  Click="OnCloseClick" Margin="0" />
+        </StackPanel>
         <TextBlock Text="模型空间 · 毫米 · 滚轮缩放 · 中键平移" Foreground="#9A9A9A" FontSize="12"
                    VerticalAlignment="Center" />
       </DockPanel>

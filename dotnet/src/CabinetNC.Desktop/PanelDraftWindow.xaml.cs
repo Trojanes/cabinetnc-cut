@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using CabinetNC.Domain.Geometry;
+using CabinetNC.Domain.Parts;
 using SkiaSharp;
 using SkiaSharp.Views.Desktop;
 
@@ -14,7 +16,14 @@ enum PanelDraftMode
     Guide,
 }
 
-readonly record struct DraftChain(PanelDraftMode Mode, IReadOnlyList<WorldPt> Pts);
+readonly record struct DraftChain(
+    PanelDraftMode Mode,
+    IReadOnlyList<WorldPt> Pts,
+    bool IsCircle = false,
+    WorldPt Center = default,
+    double Radius = 0,
+    double? DepthMm = null,
+    double? WidthMm = null);
 
 enum DraftTool
 {
@@ -36,6 +45,7 @@ enum SnapKind
     Origin,
     End,
     Mid,
+    Close,
 }
 
 enum DynField
@@ -44,6 +54,8 @@ enum DynField
     X,
     Y,
 }
+
+public sealed record DraftStockKind(string Material, double ThicknessMm, string Label);
 
 readonly record struct WorldPt(double X, double Y);
 readonly record struct SnapHit(WorldPt Pt, SnapKind Kind);
@@ -80,6 +92,15 @@ public partial class PanelDraftWindow : Window
     bool _syncingDim;
     bool _rectFromCenter;
     bool _circleDiameter;
+    Panel? _seed;
+    bool _editMode;
+    DraftChain? _pendingFeature;
+    bool _waitDepth;
+    double? _lastFeatureDepth;
+    double? _lastGrooveWidth = 6;
+
+    public Panel? ResultPanel { get; private set; }
+    public bool Confirmed { get; private set; }
 
     public PanelDraftWindow()
     {
@@ -95,7 +116,194 @@ public partial class PanelDraftWindow : Window
         };
     }
 
+    public void PrepareCreate(string panelId, string? name, string? material, double thicknessMm, Panel? seed = null)
+    {
+        _editMode = false;
+        _seed = seed;
+        Title = "创建板件";
+        if (CommitBtn is not null) CommitBtn.Content = "加入方案";
+        DraftNameBox.Text = string.IsNullOrWhiteSpace(name) ? panelId : name;
+        DraftIdBox.Text = panelId;
+        SelectKind(material, thicknessMm);
+    }
+
+    public void LockKind()
+    {
+        if (DraftKindCombo is null) return;
+        DraftKindCombo.IsEnabled = false;
+        DraftKindCombo.ToolTip = "密排创建：材料跟当前大板，不可改";
+    }
+
+    public void PrepareCreateFrom(Panel panel)
+    {
+        _editMode = true;
+        _seed = panel;
+        Title = "创建板件";
+        if (CommitBtn is not null) CommitBtn.Content = "加入方案";
+        DraftNameBox.Text = panel.Name ?? panel.DisplayTitle;
+        DraftIdBox.Text = panel.PanelId;
+        _chains.Clear();
+        _current.Clear();
+        foreach (var fig in PanelDraftCompile.Explode(panel))
+            _chains.Add(FromFigure(fig));
+        RefreshPrompt();
+        Redraw();
+    }
+
+    public void SetStockKinds(IReadOnlyList<DraftStockKind> kinds, string? material, double thicknessMm)
+    {
+        var list = kinds.Count > 0
+            ? kinds.ToList()
+            : FallbackKind(material, thicknessMm);
+        DraftKindCombo.ItemsSource = list;
+        SelectKind(material, thicknessMm);
+    }
+
+    void SelectKind(string? material, double thicknessMm)
+    {
+        if (DraftKindCombo.ItemsSource is not IEnumerable<DraftStockKind> items)
+            return;
+        var hit = items.FirstOrDefault(k =>
+            string.Equals(k.Material, material ?? "", StringComparison.OrdinalIgnoreCase)
+            && Math.Abs(k.ThicknessMm - thicknessMm) < 0.05)
+            ?? items.FirstOrDefault();
+        DraftKindCombo.SelectedItem = hit;
+    }
+
+    static List<DraftStockKind> FallbackKind(string? material, double thicknessMm)
+    {
+        var thk = thicknessMm > 0 ? thicknessMm : 18;
+        var mat = string.IsNullOrWhiteSpace(material) ? "carcass" : material.Trim();
+        return [new DraftStockKind(mat, thk, $"{mat} · {thk:0.##}mm")];
+    }
+
+    DraftStockKind? SelectedKind() => DraftKindCombo.SelectedItem as DraftStockKind;
+
     void OnCloseClick(object sender, RoutedEventArgs e) => Close();
+
+    void OnCommitClick(object sender, RoutedEventArgs e)
+    {
+        if (_waitDepth)
+        {
+            ShowDepthPrompt();
+            CommandBox.Focus();
+            return;
+        }
+        if (_mode == PanelDraftMode.Feature && _current.Count >= 2)
+        {
+            FinishCurrent(commit: true);
+            return;
+        }
+        FinishCurrent(commit: _mode != PanelDraftMode.Feature);
+        var figures = _chains
+            .Where(c => c.Mode != PanelDraftMode.Guide)
+            .Select(ToFigure)
+            .ToList();
+        var kind = SelectedKind();
+        if (kind is null)
+        {
+            CommandPrompt.Text = "命令: 先选择板材种类";
+            return;
+        }
+
+        var id = (DraftIdBox.Text ?? "").Trim();
+        if (id.Length == 0) id = _seed?.PanelId ?? "DRAFT-1";
+        var result = PanelDraftCompile.TryBuild(figures, new DraftPanelRequest
+        {
+            PanelId = id,
+            Name = DraftNameBox.Text,
+            Material = kind.Material,
+            ThicknessMm = kind.ThicknessMm,
+            Identity = _seed?.Identity,
+            Seed = _seed,
+            NormalizeOrigin = !_editMode,
+            ModuleId = _seed?.Identity?.ModuleId ?? "Draft",
+        });
+        if (!result.Ok || result.Panel is null)
+        {
+            CommandPrompt.Text = $"命令: {result.Error ?? "无法生成板件"}";
+            return;
+        }
+
+        ResultPanel = result.Panel;
+        Confirmed = true;
+        DialogResult = true;
+    }
+
+    static DraftFigure ToFigure(DraftChain chain) =>
+        new()
+        {
+            Layer = chain.Mode switch
+            {
+                PanelDraftMode.Feature => DraftLayer.Feature,
+                PanelDraftMode.Guide => DraftLayer.Guide,
+                _ => DraftLayer.Profile,
+            },
+            Points = chain.Pts.Select(p => new Point2(p.X, p.Y)).ToList(),
+            Closed = chain.IsCircle || (chain.Pts.Count >= 3 && NearPt(chain.Pts[0], chain.Pts[^1])),
+            IsCircle = chain.IsCircle && chain.Radius > 0.25,
+            CenterX = chain.Center.X,
+            CenterY = chain.Center.Y,
+            RadiusMm = chain.Radius,
+            DepthMm = chain.DepthMm,
+            WidthMm = chain.WidthMm,
+        };
+
+    static DraftChain FromFigure(DraftFigure fig)
+    {
+        var pts = fig.Points.Select(p => new WorldPt(p.X, p.Y)).ToList();
+        var mode = fig.Layer switch
+        {
+            DraftLayer.Feature => PanelDraftMode.Feature,
+            DraftLayer.Guide => PanelDraftMode.Guide,
+            _ => PanelDraftMode.Profile,
+        };
+        return new DraftChain(
+            mode, pts, fig.IsCircle, new WorldPt(fig.CenterX, fig.CenterY), fig.RadiusMm,
+            fig.DepthMm, fig.WidthMm);
+    }
+
+    static bool NearPt(WorldPt a, WorldPt b) =>
+        Math.Abs(a.X - b.X) < 1e-6 && Math.Abs(a.Y - b.Y) < 1e-6;
+
+    static int UniqueWorldCount(IReadOnlyList<WorldPt> pts)
+    {
+        var n = 0;
+        WorldPt? last = null;
+        foreach (var p in pts)
+        {
+            if (last is { } q && NearPt(q, p)) continue;
+            last = p;
+            n++;
+        }
+        if (n >= 2 && NearPt(pts[0], pts[^1])) n--;
+        return n;
+    }
+
+    static bool IsClosedWorld(IReadOnlyList<WorldPt> pts) =>
+        UniqueWorldCount(pts) >= 3 && NearPt(pts[0], pts[^1]);
+
+    bool HasBoardOutline()
+    {
+        var figs = _chains
+            .Where(c => c.Mode == PanelDraftMode.Profile)
+            .Select(ToFigure)
+            .ToList();
+        if (_mode == PanelDraftMode.Profile && UniqueWorldCount(_current) >= 3)
+            figs.Add(ToFigure(new DraftChain(_mode, [.. _current])));
+        return figs.Any(PanelDraftCompile.CanBeOutline);
+    }
+
+    void SyncCommitChrome()
+    {
+        if (CommitBtn is null) return;
+        var ready = HasBoardOutline();
+        CommitBtn.IsEnabled = ready;
+        CommitBtn.Opacity = ready ? 1 : 0.45;
+        CommitBtn.ToolTip = ready
+            ? "把当前 Profile 收成板件定义并加入方案"
+            : "先画闭合的 Profile 外框";
+    }
 
     void OnModeClick(object sender, RoutedEventArgs e)
     {
@@ -123,8 +331,17 @@ public partial class PanelDraftWindow : Window
 
     void ApplyMode(PanelDraftMode mode)
     {
+        if (_waitDepth)
+        {
+            ModeProfile.IsChecked = _mode == PanelDraftMode.Profile;
+            ModeFeature.IsChecked = _mode == PanelDraftMode.Feature;
+            ModeGuide.IsChecked = _mode == PanelDraftMode.Guide;
+            ShowDepthPrompt();
+            CommandBox.Focus();
+            return;
+        }
         if (_mode != mode)
-            FinishCurrent(commit: true);
+            FinishCurrent(commit: _mode != PanelDraftMode.Feature);
         _mode = mode;
         ModeProfile.IsChecked = mode == PanelDraftMode.Profile;
         ModeFeature.IsChecked = mode == PanelDraftMode.Feature;
@@ -211,7 +428,8 @@ public partial class PanelDraftWindow : Window
 
     void StartLine()
     {
-        FinishCurrent(commit: true);
+        if (_waitDepth) { ShowDepthPrompt(); CommandBox.Focus(); return; }
+        FinishCurrent(commit: _mode != PanelDraftMode.Feature);
         _tool = DraftTool.Line;
         _phase = LinePhase.WaitFirst;
         _current.Clear();
@@ -224,7 +442,8 @@ public partial class PanelDraftWindow : Window
 
     void StartRect()
     {
-        FinishCurrent(commit: true);
+        if (_waitDepth) { ShowDepthPrompt(); CommandBox.Focus(); return; }
+        FinishCurrent(commit: _mode != PanelDraftMode.Feature);
         ClearDyn();
         _tool = DraftTool.Rect;
         _phase = LinePhase.WaitFirst;
@@ -238,7 +457,8 @@ public partial class PanelDraftWindow : Window
 
     void StartCircle()
     {
-        FinishCurrent(commit: true);
+        if (_waitDepth) { ShowDepthPrompt(); CommandBox.Focus(); return; }
+        FinishCurrent(commit: _mode != PanelDraftMode.Feature);
         ClearDyn();
         _tool = DraftTool.Circle;
         _phase = LinePhase.WaitFirst;
@@ -285,7 +505,24 @@ public partial class PanelDraftWindow : Window
     void FinishCurrent(bool commit)
     {
         if (commit && _current.Count >= 2 && _tool != DraftTool.Circle)
-            _chains.Add(new DraftChain(_mode, [.. _current]));
+        {
+            var pts = _current.ToList();
+            if (_mode == PanelDraftMode.Profile && UniqueWorldCount(pts) >= 3 && !NearPt(pts[0], pts[^1]))
+                pts.Add(pts[0]);
+            var chain = new DraftChain(_mode, pts);
+            _current.Clear();
+            _hoverSnap = null;
+            ClearDyn();
+            if (_tool is DraftTool.Line or DraftTool.Rect or DraftTool.Circle)
+                _phase = LinePhase.WaitFirst;
+            if (_mode == PanelDraftMode.Feature)
+            {
+                OfferFeature(chain);
+                return;
+            }
+            _chains.Add(chain);
+            return;
+        }
         _current.Clear();
         _hoverSnap = null;
         ClearDyn();
@@ -293,8 +530,115 @@ public partial class PanelDraftWindow : Window
             _phase = LinePhase.WaitFirst;
     }
 
-    /// <summary>Leave the active tool. Solid geometry stays; only the rubber-band is dropped.</summary>
-    void CancelCommand() => ExitTool(commit: true);
+    /// <summary>Leave the active tool. Profile ink stays; unfinished Feature is dropped.</summary>
+    void CancelCommand()
+    {
+        if (_waitDepth)
+        {
+            _pendingFeature = null;
+            _waitDepth = false;
+            RefreshPrompt();
+            Redraw();
+            CommandBox.Focus();
+            return;
+        }
+        ExitTool(commit: _mode != PanelDraftMode.Feature);
+    }
+
+    void OfferFeature(DraftChain chain)
+    {
+        _pendingFeature = chain;
+        _waitDepth = true;
+        CommandBox.Clear();
+        ShowDepthPrompt();
+        CommandBox.Focus();
+        Redraw();
+    }
+
+    void ShowDepthPrompt()
+    {
+        if (_pendingFeature is not { } pend) return;
+        var kind = FeatureKindName(pend);
+        var last = _lastFeatureDepth is { } d ? $" · 回车沿用 {FormatDim(d)}" : "";
+        CommandPrompt.Text = $"命令: 指定{kind}深度 mm（T=通切，槽可写 深,宽）{last}:";
+    }
+
+    static string FeatureKindName(DraftChain c)
+    {
+        if (c.IsCircle) return "孔";
+        if (c.Pts.Count >= 3 && NearPt(c.Pts[0], c.Pts[^1])) return "口袋";
+        return "槽";
+    }
+
+    void AcceptFeatureDepth(string raw)
+    {
+        if (_pendingFeature is not { } pend) return;
+        double depth;
+        double? width = null;
+        if (raw.Length == 0)
+        {
+            if (_lastFeatureDepth is not { } last)
+            {
+                CommandPrompt.Text = "命令: 必须写入深度 mm（T=通切）";
+                return;
+            }
+            depth = last;
+            width = _lastGrooveWidth;
+        }
+        else if (raw.Equals("T", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("THROUGH", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("通", StringComparison.Ordinal)
+            || raw.Equals("通切", StringComparison.Ordinal))
+        {
+            depth = BoardThickness();
+        }
+        else if (!TryParseDepth(raw, out depth, out width))
+        {
+            CommandPrompt.Text = "命令: 无法识别深度（数字，或 T=通切，槽可写 8,6）";
+            return;
+        }
+
+        if (depth <= 0)
+        {
+            CommandPrompt.Text = "命令: 深度必须 > 0";
+            return;
+        }
+
+        _lastFeatureDepth = depth;
+        if (width is { } w && w > 0) _lastGrooveWidth = w;
+        else if (FeatureKindName(pend) == "槽")
+            width = _lastGrooveWidth;
+
+        _chains.Add(pend with { DepthMm = depth, WidthMm = width });
+        _pendingFeature = null;
+        _waitDepth = false;
+        CommandBox.Clear();
+        RefreshPrompt();
+        Redraw();
+    }
+
+    double BoardThickness()
+    {
+        var thk = SelectedKind()?.ThicknessMm ?? _seed?.ThicknessMm ?? 18;
+        return thk > 0.2 ? thk : 18;
+    }
+
+    static bool TryParseDepth(string raw, out double depth, out double? width)
+    {
+        depth = 0;
+        width = null;
+        var parts = raw.Split([',', ' ', 'x', 'X', '*'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return false;
+        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out depth)
+            && !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.CurrentCulture, out depth))
+            return false;
+        if (parts.Length >= 2
+            && (double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var w)
+                || double.TryParse(parts[1], NumberStyles.Float, CultureInfo.CurrentCulture, out w))
+            && w > 0)
+            width = w;
+        return true;
+    }
 
     void UndoVertex()
     {
@@ -308,9 +652,20 @@ public partial class PanelDraftWindow : Window
 
     void CloseChain()
     {
-        if (_current.Count < 3) return;
-        _current.Add(_current[0]);
+        if (UniqueWorldCount(_current) < 3)
+        {
+            CommandPrompt.Text = "命令: 至少 3 个点才能围成板件外框";
+            return;
+        }
+        if (!NearPt(_current[0], _current[^1]))
+            _current.Add(_current[0]);
         FinishCurrent(commit: true);
+        if (_waitDepth) return;
+        if (_mode == PanelDraftMode.Profile)
+        {
+            ExitTool(commit: false);
+            return;
+        }
         RefreshPrompt();
         Redraw();
     }
@@ -328,12 +683,22 @@ public partial class PanelDraftWindow : Window
             return;
         }
         if (_tool != DraftTool.Line) StartLine();
+        if (_current.Count >= 3 && NearPt(pt, _current[0]))
+        {
+            CloseChain();
+            return;
+        }
         if (_current.Count > 0)
         {
             pt = EffectiveRel(DynAnchor, pt);
             var last = _current[^1];
             if (Math.Abs(last.X - pt.X) < 1e-6 && Math.Abs(last.Y - pt.Y) < 1e-6)
                 return;
+            if (_current.Count >= 3 && NearPt(pt, _current[0]))
+            {
+                CloseChain();
+                return;
+            }
         }
         _current.Add(pt);
         _phase = LinePhase.WaitNext;
@@ -364,13 +729,7 @@ public partial class PanelDraftWindow : Window
             CommandPrompt.Text = "命令: RECTANG 宽高不能为 0";
             return;
         }
-        _chains.Add(new DraftChain(_mode, ring));
-        _current.Clear();
-        _phase = LinePhase.WaitFirst;
-        ClearDyn();
-        CommandBox.Clear();
-        RefreshPrompt();
-        Redraw();
+        CommitDrawn(new DraftChain(_mode, ring));
     }
 
     void AcceptCirclePoint(WorldPt pt)
@@ -396,11 +755,22 @@ public partial class PanelDraftWindow : Window
                 : "命令: CIRCLE 半径不能为 0";
             return;
         }
-        _chains.Add(new DraftChain(_mode, ring));
+        var (c, r) = CircleGeom(_current[0], dest, _circleDiameter);
+        CommitDrawn(new DraftChain(_mode, ring, IsCircle: true, Center: c, Radius: r));
+    }
+
+    void CommitDrawn(DraftChain chain)
+    {
         _current.Clear();
         _phase = LinePhase.WaitFirst;
         ClearDyn();
         CommandBox.Clear();
+        if (_mode == PanelDraftMode.Feature)
+        {
+            OfferFeature(chain);
+            return;
+        }
+        _chains.Add(chain);
         RefreshPrompt();
         Redraw();
     }
@@ -721,6 +1091,12 @@ public partial class PanelDraftWindow : Window
 
     void RefreshPrompt()
     {
+        SyncCommitChrome();
+        if (_waitDepth)
+        {
+            ShowDepthPrompt();
+            return;
+        }
         if (_tool == DraftTool.Line)
         {
             if (_phase != LinePhase.WaitNext)
@@ -742,7 +1118,9 @@ public partial class PanelDraftWindow : Window
             if (_lockDx is { } lx) bits.Add($"ΔX {FormatDim(lx)}");
             if (_lockDy is { } ly) bits.Add($"ΔY {FormatDim(ly)}");
             CommandPrompt.Text = bits.Count == 0
-                ? "命令: LINE 指定下一点 或 Tab 输入 ΔX/ΔY 或 Enter 结束:"
+                ? (_mode == PanelDraftMode.Profile
+                    ? "命令: LINE 指定下一点 · 回起点或 Enter/C 闭合成板:"
+                    : "命令: LINE 指定下一点 或 Tab 输入 ΔX/ΔY 或 Enter 结束:")
                 : $"命令: LINE 指定下一点（已锁定 {string.Join(" · ", bits)}）:";
             return;
         }
@@ -804,12 +1182,20 @@ public partial class PanelDraftWindow : Window
             return;
         }
 
+        if (HasBoardOutline())
+        {
+            CommandPrompt.Text = "命令: 外框已是板件定义 · 点「加入方案」或输入 PANEL";
+            SyncCommitChrome();
+            return;
+        }
+
         CommandPrompt.Text = _mode switch
         {
-            PanelDraftMode.Feature => "命令: 指定特征（槽 / 口袋 / 盲孔）:",
+            PanelDraftMode.Feature => "命令: 指定特征（槽 / 口袋 / 盲孔）· 画完写入深度:",
             PanelDraftMode.Guide => "命令: 指定辅助线:",
-            _ => "命令:",
+            _ => "命令: 先画 Profile 外框（矩形 / 多段线 / 圆）",
         };
+        SyncCommitChrome();
     }
 
     void OnWindowKey(object sender, KeyEventArgs e)
@@ -877,10 +1263,31 @@ public partial class PanelDraftWindow : Window
     {
         var raw = (CommandBox.Text ?? "").Trim();
         CommandBox.Clear();
+        if (_waitDepth)
+        {
+            AcceptFeatureDepth(raw);
+            return;
+        }
         if (raw.Length == 0)
         {
             if (_tool == DraftTool.Line && _phase == LinePhase.WaitNext)
-                ExitTool(commit: true);
+            {
+                if (_mode == PanelDraftMode.Profile && UniqueWorldCount(_current) >= 3)
+                    CloseChain();
+                else
+                    ExitTool(commit: _mode != PanelDraftMode.Feature || UniqueWorldCount(_current) >= 2);
+            }
+            return;
+        }
+
+        if (raw.Equals("PANEL", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("DONE", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("加入", StringComparison.Ordinal)
+            || raw.Equals("加入方案", StringComparison.Ordinal)
+            || raw.Equals("写回", StringComparison.Ordinal)
+            || raw.Equals("写回方案", StringComparison.Ordinal))
+        {
+            OnCommitClick(this, new RoutedEventArgs());
             return;
         }
 
@@ -988,6 +1395,13 @@ public partial class PanelDraftWindow : Window
 
     void OnDraftDown(object sender, MouseButtonEventArgs e)
     {
+        if (_waitDepth)
+        {
+            ShowDepthPrompt();
+            CommandBox.Focus();
+            e.Handled = true;
+            return;
+        }
         var screen = ScreenFromMouse(e);
         var raw = ToWorld(screen.X, screen.Y);
         var resolved = ResolvePoint(raw, updateHover: true).Pt;
@@ -1113,13 +1527,16 @@ public partial class PanelDraftWindow : Window
 
     static int Rank(SnapKind k) => k switch
     {
-        SnapKind.End => 0,
-        SnapKind.Mid => 1,
-        _ => 2,
+        SnapKind.Close => 0,
+        SnapKind.End => 1,
+        SnapKind.Mid => 2,
+        _ => 3,
     };
 
     IEnumerable<SnapHit> Candidates()
     {
+        if (_tool == DraftTool.Line && _current.Count >= 3)
+            yield return new SnapHit(_current[0], SnapKind.Close);
         yield return new SnapHit(new WorldPt(0, 0), SnapKind.Origin);
         foreach (var chain in EnumerateChains())
         {
@@ -1195,16 +1612,65 @@ public partial class PanelDraftWindow : Window
 
     void DrawChains(SKCanvas canvas)
     {
+        var closedProfiles = _chains.Where(c => c.Mode == PanelDraftMode.Profile && IsClosedWorld(c.Pts)).ToList();
+        if (closedProfiles.Count > 0)
+        {
+            using var fill = new SKPaint
+            {
+                Color = new SKColor(0x4A, 0x9A, 0xE8, 0x32),
+                IsAntialias = true,
+            };
+            using var path = new SKPath { FillType = SKPathFillType.EvenOdd };
+            foreach (var chain in closedProfiles)
+                AppendClosed(path, chain.Pts);
+            canvas.DrawPath(path, fill);
+        }
         foreach (var chain in _chains)
         {
             using var ink = LayerPaint(chain.Mode, dashed: chain.Mode == PanelDraftMode.Guide);
             DrawChain(canvas, chain.Pts, ink);
+            DrawFeatureDepth(canvas, chain);
+        }
+        if (_pendingFeature is { } pend)
+        {
+            using var ink = LayerPaint(pend.Mode, dashed: false);
+            DrawChain(canvas, pend.Pts, ink);
         }
         if (_current.Count >= 2)
         {
             using var ink = LayerPaint(_mode, dashed: _mode == PanelDraftMode.Guide);
             DrawChain(canvas, _current, ink);
         }
+    }
+
+    void AppendClosed(SKPath path, IReadOnlyList<WorldPt> chain)
+    {
+        if (chain.Count < 3) return;
+        var a0 = ToScreen(chain[0].X, chain[0].Y);
+        path.MoveTo((float)a0.X, (float)a0.Y);
+        for (var i = 1; i < chain.Count; i++)
+        {
+            var a = ToScreen(chain[i].X, chain[i].Y);
+            path.LineTo((float)a.X, (float)a.Y);
+        }
+        path.Close();
+    }
+
+    void DrawFeatureDepth(SKCanvas canvas, DraftChain chain)
+    {
+        if (chain.Mode != PanelDraftMode.Feature || chain.DepthMm is not { } d || d <= 0)
+            return;
+        if (chain.Pts.Count == 0) return;
+        var mid = chain.IsCircle
+            ? chain.Center
+            : new WorldPt(chain.Pts.Average(p => p.X), chain.Pts.Average(p => p.Y));
+        var (sx, sy) = ToScreen(mid.X, mid.Y);
+        var label = chain.WidthMm is { } w && w > 0
+            ? $"d{FormatDim(d)} w{FormatDim(w)}"
+            : $"d{FormatDim(d)}";
+        using var font = new SKFont(SKTypeface.FromFamilyName("Consolas"), 11);
+        using var ink = new SKPaint { Color = new SKColor(0xE2, 0x4A, 0x4A), IsAntialias = true };
+        canvas.DrawText(label, sx + 6, sy - 6, SKTextAlign.Left, font, ink);
     }
 
     static SKPaint LayerPaint(PanelDraftMode mode, bool dashed) =>
@@ -1485,6 +1951,11 @@ public partial class PanelDraftWindow : Window
         const float r = 6;
         switch (hit.Kind)
         {
+            case SnapKind.Close:
+                pen.Color = new SKColor(0xE8, 0xC8, 0x4A);
+                canvas.DrawRect(sx - r, sy - r, r * 2, r * 2, pen);
+                canvas.DrawCircle(sx, sy, 2.2f, pen);
+                break;
             case SnapKind.End:
                 canvas.DrawRect(sx - r, sy - r, r * 2, r * 2, pen);
                 break;

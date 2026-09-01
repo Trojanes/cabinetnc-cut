@@ -53,6 +53,7 @@ public partial class MainWindow : Window
     readonly HashSet<string> _locked = new(StringComparer.Ordinal);
     PanelPart? _selected;
     PanelPart? _clipboardPanel;
+    readonly List<PanelPart> _clipboardNest = [];
     StartNestingReply? _nest;
     IReadOnlyList<NestSheetSpec> _nestSheetsUsed = [];
     IReadOnlyList<PartInPartSlot> _partInPartSlots = [];
@@ -149,6 +150,7 @@ public partial class MainWindow : Window
     double _nestDragRotDeg;
     readonly HashSet<string> _nestSelected = new(StringComparer.Ordinal);
     string? _nestContextPanelId;
+    bool _nestContextInHold;
     readonly HashSet<string> _retargetFocusIds = new(StringComparer.Ordinal);
     readonly Dictionary<string, (double Ox, double Oy, double Rot)> _nestGroupOrig = new(StringComparer.Ordinal);
     double _holdSlideOx, _holdSlideOy;
@@ -664,10 +666,13 @@ public partial class MainWindow : Window
                 n++;
                 kindOrdinal[key] = n;
                 var kindLabel = panel is null ? $"大板{sheetGroup.Key + 1}" : KindDisplayName(panel);
+                var color = panel?.DisplayColor ?? "Unassigned";
+                var kind = panel?.DisplayKind ?? $"Sheet{sheetGroup.Key + 1}";
+                var thickness = panel?.ThicknessMm ?? 0;
                 _exportFiles.Add(new ExportNcFile
                 {
-                    FileName = ExportNaming.AncFileName(project, kindLabel, n),
-                    Title = $"{project} · {kindLabel} · 第 {n} 张",
+                    FileName = ExportNaming.AncFileName(n, thickness, color, kind, project),
+                    Title = $"{n:00} · {ExportNaming.ThicknessToken(thickness)} · {color} · {kind} · {project}",
                     Detail = detail,
                     SheetIndex = sheetGroup.Key,
                     KindKey = key,
@@ -3018,6 +3023,7 @@ public partial class MainWindow : Window
                 SpacingMm = k.SpacingMm,
                 BorderMm = k.BorderMm,
                 AllowRotate90 = k.AllowRotate90,
+                SheetGrainKey = k.SheetGrainKey,
                 AllowPartsInPart = k.AllowPartsInPart,
                 UseLeftoverPieces = k.UseLeftoverPieces,
                 LeftoverXMm = k.LeftoverXMm,
@@ -3149,6 +3155,7 @@ public partial class MainWindow : Window
                 SpacingMmText = CamBox(k.SpacingMm),
                 BorderMmText = CamBox(k.BorderMm),
                 AllowRotate90 = k.AllowRotate90,
+                SheetGrainKey = string.IsNullOrWhiteSpace(k.SheetGrainKey) ? "none" : k.SheetGrainKey,
                 AllowPartsInPart = k.AllowPartsInPart,
                 UseLeftoverPieces = k.UseLeftoverPieces,
                 LeftoverXMmText = LeftoverBox(k.LeftoverXMm),
@@ -3436,8 +3443,11 @@ public partial class MainWindow : Window
         CanvasHost.InvalidateVisual();
     }
 
+    bool _stockGrainUiQuiet;
+
     void RefreshStockMaterialCards()
     {
+        _stockGrainUiQuiet = true;
         var defaultsW = ParseMm(StockWidthBox.Text, _library.Nest.DefaultSheetWidthMm);
         var defaultsL = ParseMm(StockLengthBox.Text, _library.Nest.DefaultSheetLengthMm);
         var defaultsSpacing = ParseMm(NestSpacingBox.Text, _library.Nest.SpacingMm > 0 ? _library.Nest.SpacingMm : 12);
@@ -3452,6 +3462,7 @@ public partial class MainWindow : Window
         {
             StockMaterialCards.ItemsSource = null;
             StockPaneEmpty.Visibility = Visibility.Visible;
+            _stockGrainUiQuiet = false;
             return;
         }
 
@@ -3481,6 +3492,8 @@ public partial class MainWindow : Window
             var allowRot = prior?.AllowRotate90 ?? defaultsAllowRot;
             var allowPip = prior?.AllowPartsInPart ?? true;
             var useLeftover = prior?.UseLeftoverPieces ?? false;
+            var sheetGrain = prior?.SheetGrainKey
+                ?? (group.Any(GrainAlign.HasPartGrain) ? "length" : "none");
 
             _stockKinds.Add(new StockMaterialKindVm
             {
@@ -3494,16 +3507,53 @@ public partial class MainWindow : Window
                 SpacingMmText = spacing.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
                 BorderMmText = border.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
                 AllowRotate90 = allowRot,
+                SheetGrainKey = sheetGrain,
                 AllowPartsInPart = allowPip,
                 UseLeftoverPieces = useLeftover,
                 LeftoverXMmText = prior is null ? "" : LeftoverBox(prior.LeftoverXMm),
                 LeftoverYMmText = prior is null ? "" : LeftoverBox(prior.LeftoverYMm),
+                PanelGrainsExpanded = prior?.PanelGrainsExpanded ?? false,
+                PanelGrains = group
+                    .OrderBy(p => p.DisplayPartName, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(p => p.PanelId, StringComparer.OrdinalIgnoreCase)
+                    .Select(p => new StockPanelGrainRow
+                    {
+                        PanelId = p.PanelId,
+                        DisplayName = p.DisplayPartName,
+                        GrainKey = GrainAlign.PartKey(p),
+                    })
+                    .ToList(),
             });
         }
 
         StockMaterialCards.ItemsSource = null;
         StockMaterialCards.ItemsSource = _stockKinds.ToList();
         StockPaneEmpty.Visibility = _stockKinds.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        Dispatcher.BeginInvoke(() => _stockGrainUiQuiet = false, DispatcherPriority.Background);
+    }
+
+    void OnStockSheetGrainChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_stockGrainUiQuiet || _session.Package is null) return;
+        InvalidateManufacturingOutputs("sheet grain");
+    }
+
+    void OnStockPanelGrainChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_stockGrainUiQuiet || _session.Package is null) return;
+        if (sender is not ComboBox { DataContext: StockPanelGrainRow row }) return;
+        var panel = _session.Package.Panels.FirstOrDefault(p => p.PanelId == row.PanelId);
+        if (panel is null) return;
+        var next = GrainAlign.NormalizePart(row.GrainKey);
+        var cur = GrainAlign.NormalizePart(panel.GrainDirection ?? panel.Orientation?.GrainDirection);
+        if (next == cur) return;
+        _session.ReplacePanel(panel.WithGrain(next));
+        foreach (var kind in _stockKinds)
+        {
+            if (kind.PanelGrains.Any(r => r.PanelId == row.PanelId))
+                kind.NotifyPanelGrainHeader();
+        }
+        InvalidateManufacturingOutputs("part grain");
     }
 
     void OnStockMachineChanged(object sender, SelectionChangedEventArgs e) =>
@@ -3848,7 +3898,30 @@ public partial class MainWindow : Window
 
     void CopySelectedToClipboard()
     {
+        if (_stage == "nest" && _nest is { Ok: true } && _session.Package is not null)
+        {
+            var ids = _nestSelected.Count > 0
+                ? _nestSelected.ToList()
+                : _selected is not null ? [_selected.PanelId] : [];
+            _clipboardNest.Clear();
+            foreach (var id in ids)
+            {
+                var panel = _session.Package.Panels.FirstOrDefault(p => p.PanelId == id);
+                if (panel is null) continue;
+                _clipboardNest.Add(PanelEdit.Duplicate(panel, panel.PanelId));
+            }
+            _clipboardPanel = _clipboardNest.FirstOrDefault();
+            if (_clipboardNest.Count == 0)
+            {
+                SetStatus("先选中要复制的板件");
+                return;
+            }
+            SetStatus($"已复制 {_clipboardNest.Count} 件（Ctrl+V 粘贴到待用区）");
+            return;
+        }
+
         if (_selected is null) return;
+        _clipboardNest.Clear();
         _clipboardPanel = PanelEdit.Duplicate(_selected, _selected.PanelId);
         SetStatus($"已复制 {_selected.PanelId}（Ctrl+V 粘贴）");
     }
@@ -3862,7 +3935,27 @@ public partial class MainWindow : Window
 
     void PasteClipboardPanel()
     {
-        if (_clipboardPanel is null || _session.Package is null)
+        if (_session.Package is null)
+        {
+            SetStatus("剪贴板为空");
+            return;
+        }
+
+        if (_stage == "nest" && _nest is { Ok: true })
+        {
+            var sources = _clipboardNest.Count > 0
+                ? _clipboardNest.ToList()
+                : _clipboardPanel is not null ? [_clipboardPanel] : [];
+            if (sources.Count == 0)
+            {
+                SetStatus("剪贴板为空");
+                return;
+            }
+            PastePanelsIntoHolding(sources);
+            return;
+        }
+
+        if (_clipboardPanel is null)
         {
             SetStatus("剪贴板为空");
             return;
@@ -3873,6 +3966,60 @@ public partial class MainWindow : Window
         InvalidateManufacturingOutputs("paste panel");
         RefreshPartList(selectId: id);
         SetStatus($"已粘贴 {id}");
+    }
+
+    void PastePanelsIntoHolding(IReadOnlyList<PanelPart> sources)
+    {
+        if (_session.Package is null || _nest is not { Ok: true } || sources.Count == 0)
+            return;
+
+        var staySheet = _activeNestSheet;
+        string? lastId = null;
+        foreach (var src in sources)
+        {
+            var copyId = _session.NextCopyPanelId(src.PanelId);
+            var copy = PanelEdit.Duplicate(src, copyId);
+            if (!GrainAlign.HasPartGrain(copy)
+                && KindHasGrain(copy.Material, copy.ThicknessMm))
+                copy = copy.WithGrain("X");
+            _session.ReplacePanel(copy);
+            var rot = _nestHolding.FirstOrDefault(h => h.PanelId == src.PanelId)?.RotationDeg
+                ?? _nest.Placements.FirstOrDefault(p => p.PanelId == src.PanelId)?.RotationDeg
+                ?? 0;
+            ParkInHolding(copy, rot);
+            lastId = copyId;
+        }
+
+        if (lastId is not null)
+        {
+            _nestSelected.Clear();
+            _nestSelected.Add(lastId);
+            _selected = _session.Package.Panels.FirstOrDefault(p => p.PanelId == lastId);
+        }
+
+        _activeNestSheet = staySheet;
+        RefreshNestUiKeepSheet(lastId, staySheet);
+        SetStatus($"已粘贴 {sources.Count} 件到待用区 · 仍在大板 {staySheet + 1}");
+    }
+
+    void RefreshNestUiKeepSheet(string? selectId, int staySheet)
+    {
+        _syncingNestSelection = true;
+        try
+        {
+            BindPartList(selectId);
+            _activeNestSheet = staySheet;
+            UpdateNestSheetChrome();
+        }
+        finally
+        {
+            _syncingNestSelection = false;
+        }
+        RefreshGeomRail();
+        RefreshNestReport();
+        RefreshWorkflowDots();
+        UpdateCanvasHint();
+        CanvasHost.InvalidateVisual();
     }
 
     void DuplicateSelectedPanel()
@@ -3919,43 +4066,52 @@ public partial class MainWindow : Window
 
         LeftRailContent.Visibility = Visibility.Visible;
         var panels = _session.Package.Panels.ToList();
-        if (_stage == "stock")
+        var quietNest = _stage is "nest" or "ops";
+        if (quietNest) _syncingNestSelection = true;
+        try
         {
-            var rows = PackageMerge.GroupIdenticalStock(panels)
-                .Select(g => new StockPartRow
-                {
-                    Representative = g[0],
-                    Members = g,
-                    MaterialGroupLabel = KindDisplayName(g[0]),
-                })
-                .ToList();
-            var view = new ListCollectionView(rows);
-            view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(StockPartRow.MaterialGroupLabel)));
-            view.SortDescriptions.Add(new SortDescription(nameof(StockPartRow.MaterialGroupLabel), ListSortDirection.Ascending));
-            view.SortDescriptions.Add(new SortDescription(nameof(StockPartRow.DisplayPartName), ListSortDirection.Ascending));
-            PartList.ItemsSource = view;
-            var row = rows.FirstOrDefault(r => r.Members.Any(p => p.PanelId == selectId))
-                ?? rows.FirstOrDefault(r => r.Members.Any(p => p.PanelId == _selected?.PanelId))
-                ?? rows.FirstOrDefault();
-            _selected = row?.Representative;
-            PartList.SelectedItem = row;
+            if (_stage == "stock")
+            {
+                var rows = PackageMerge.GroupIdenticalStock(panels)
+                    .Select(g => new StockPartRow
+                    {
+                        Representative = g[0],
+                        Members = g,
+                        MaterialGroupLabel = KindDisplayName(g[0]),
+                    })
+                    .ToList();
+                var view = new ListCollectionView(rows);
+                view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(StockPartRow.MaterialGroupLabel)));
+                view.SortDescriptions.Add(new SortDescription(nameof(StockPartRow.MaterialGroupLabel), ListSortDirection.Ascending));
+                view.SortDescriptions.Add(new SortDescription(nameof(StockPartRow.DisplayPartName), ListSortDirection.Ascending));
+                PartList.ItemsSource = view;
+                var row = rows.FirstOrDefault(r => r.Members.Any(p => p.PanelId == selectId))
+                    ?? rows.FirstOrDefault(r => r.Members.Any(p => p.PanelId == _selected?.PanelId))
+                    ?? rows.FirstOrDefault();
+                _selected = row?.Representative;
+                PartList.SelectedItem = row;
+                Dispatcher.BeginInvoke(SyncStockKindChecks, DispatcherPriority.Loaded);
+                return;
+            }
+
+            var tree = new ListCollectionView(panels);
+            tree.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PanelPart.DisplayPackage)));
+            tree.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PanelPart.DisplayAssembly)));
+            tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayPackage), ListSortDirection.Ascending));
+            tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayAssembly), ListSortDirection.Ascending));
+            tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayPartName), ListSortDirection.Ascending));
+            PartList.ItemsSource = tree;
+
+            _selected = panels.FirstOrDefault(p => p.PanelId == selectId)
+                ?? panels.FirstOrDefault(p => p.PanelId == _selected?.PanelId)
+                ?? panels.FirstOrDefault();
+            PartList.SelectedItem = _selected;
             Dispatcher.BeginInvoke(SyncStockKindChecks, DispatcherPriority.Loaded);
-            return;
         }
-
-        var tree = new ListCollectionView(panels);
-        tree.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PanelPart.DisplayPackage)));
-        tree.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PanelPart.DisplayAssembly)));
-        tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayPackage), ListSortDirection.Ascending));
-        tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayAssembly), ListSortDirection.Ascending));
-        tree.SortDescriptions.Add(new SortDescription(nameof(PanelPart.DisplayPartName), ListSortDirection.Ascending));
-        PartList.ItemsSource = tree;
-
-        _selected = panels.FirstOrDefault(p => p.PanelId == selectId)
-            ?? panels.FirstOrDefault(p => p.PanelId == _selected?.PanelId)
-            ?? panels.FirstOrDefault();
-        PartList.SelectedItem = _selected;
-        Dispatcher.BeginInvoke(SyncStockKindChecks, DispatcherPriority.Loaded);
+        finally
+        {
+            if (quietNest) _syncingNestSelection = false;
+        }
     }
 
     void OnStockKindNameDown(object sender, MouseButtonEventArgs e)
@@ -4088,7 +4244,18 @@ public partial class MainWindow : Window
         return hit is null ? null : NestGroupKey.From(hit.Material, hit.ThicknessMm);
     }
 
-    void OnCreatePanelClick(object sender, RoutedEventArgs e)
+    void OnCreatePanelClick(object sender, RoutedEventArgs e) => OpenPanelDraft();
+
+    void OnPartListDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_stage != "stock") return;
+        if (e.OriginalSource is DependencyObject d && FindAncestor<ListBoxItem>(d) is null)
+            return;
+        OpenPanelDraft();
+        e.Handled = true;
+    }
+
+    void OpenPanelDraft()
     {
         if (_session.Package is null)
         {
@@ -4097,7 +4264,198 @@ public partial class MainWindow : Window
         }
 
         var dlg = new PanelDraftWindow { Owner = this };
-        dlg.ShowDialog();
+        var sample = _selected ?? _session.Package.Panels.FirstOrDefault();
+        var material = sample?.Material;
+        var thickness = sample?.ThicknessMm > 0 ? sample.ThicknessMm : 18;
+        if (_selected is not null)
+            dlg.PrepareCreateFrom(_selected);
+        else
+        {
+            dlg.PrepareCreate(
+                _session.NextDraftPanelId(),
+                name: null,
+                material: material,
+                thicknessMm: thickness);
+        }
+        dlg.SetStockKinds(DraftStockKinds(), material, thickness);
+        if (dlg.ShowDialog() != true || dlg.ResultPanel is null) return;
+        AcceptDraftPanel(dlg.ResultPanel);
+    }
+
+    void OnNestCreatePanelClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null)
+        {
+            SetStatus("请先载入方案");
+            return;
+        }
+        if (_nest is not { Ok: true })
+        {
+            SetStatus("请先初始密排，再在密排页创建板件");
+            return;
+        }
+
+        var sample = CurrentSheetSample();
+        var key = ActiveSheetGroupKey();
+        var material = sample?.Material ?? key.Material;
+        var thickness = sample?.ThicknessMm > 0 ? sample.ThicknessMm
+            : key.ThicknessMm > 0 ? key.ThicknessMm : 16;
+        if (string.IsNullOrWhiteSpace(material))
+        {
+            SetStatus("当前大板没有材料，无法创建");
+            return;
+        }
+
+        var kinds = DraftStockKinds()
+            .Where(k => string.Equals(k.Material, material, StringComparison.OrdinalIgnoreCase)
+                        && Math.Abs(k.ThicknessMm - thickness) < 0.05)
+            .ToList();
+        if (kinds.Count == 0)
+        {
+            var label = sample?.MaterialGroupLabel ?? $"{material} · {thickness:0.##}mm";
+            kinds.Add(new DraftStockKind(material, thickness, label));
+        }
+
+        var dlg = new PanelDraftWindow { Owner = this };
+        dlg.PrepareCreate(_session.NextDraftPanelId(), name: null, material, thickness, sample);
+        dlg.SetStockKinds(kinds, material, thickness);
+        dlg.LockKind();
+        if (dlg.ShowDialog() != true || dlg.ResultPanel is null) return;
+        AcceptDraftPanelToHolding(dlg.ResultPanel, sample);
+    }
+
+    PanelPart? CurrentSheetSample()
+    {
+        if (_session.Package is null) return null;
+        if (_nest is { Ok: true })
+        {
+            var onSheet = _nest.Placements.FirstOrDefault(p => p.SheetIndex == _activeNestSheet);
+            if (onSheet is not null)
+            {
+                var hit = _session.Package.Panels.FirstOrDefault(p => p.PanelId == onSheet.PanelId);
+                if (hit is not null) return hit;
+            }
+        }
+        var key = ActiveSheetGroupKey();
+        return _session.Package.Panels.FirstOrDefault(p =>
+            NestGroupKey.From(p.Material, p.ThicknessMm).Equals(key));
+    }
+
+    bool KindHasGrain(string? material, double thicknessMm)
+    {
+        if (_session.Package is null) return false;
+        if (CurrentSheetGrain() != SheetGrainKind.None) return true;
+        return _session.Package.Panels.Any(p =>
+            string.Equals(p.Material, material, StringComparison.OrdinalIgnoreCase)
+            && Math.Abs(p.ThicknessMm - thicknessMm) < 0.05
+            && GrainAlign.HasPartGrain(p));
+    }
+
+    void AcceptDraftPanelToHolding(PanelPart panel, PanelPart? sample)
+    {
+        if (_session.Package is null) return;
+        if (panel.Identity is null || string.IsNullOrWhiteSpace(panel.Identity.PackageId))
+        {
+            panel = panel.WithTree(panel.PanelId, new WorkpieceIdentity
+            {
+                PackageId = sample?.Identity?.PackageId ?? _session.Package.JobId,
+                PackageLabel = sample?.Identity?.PackageLabel ?? sample?.DisplayPackage ?? _session.Package.JobId,
+                ProjectId = sample?.Identity?.ProjectId,
+                ModuleId = panel.Identity?.ModuleId ?? "Draft",
+                WorkpieceId = panel.PanelId,
+                Role = panel.Identity?.Role ?? sample?.Identity?.Role,
+                SourceFormat = "draft",
+            });
+        }
+
+        if (!GrainAlign.HasPartGrain(panel)
+            && KindHasGrain(panel.Material, panel.ThicknessMm))
+            panel = panel.WithGrain("X");
+
+        _session.ReplacePanel(panel);
+        ParkInHolding(panel);
+        _nestSelected.Clear();
+        _nestSelected.Add(panel.PanelId);
+        _selected = panel;
+        RefreshPartList(selectId: panel.PanelId);
+        RefreshStockMaterialCards();
+        RefreshNestReport();
+        RefreshWorkflowDots();
+        CanvasHost.InvalidateVisual();
+        SetStatus($"已创建 {panel.DisplayTitle} · 在待用区 · 可拖回当前大板");
+    }
+
+    void ParkInHolding(PanelPart panel, double rotDeg = 0)
+    {
+        var (w, h) = NestDrag.SizeRotated(panel, rotDeg);
+        _nestHolding.RemoveAll(hld => hld.PanelId == panel.PanelId);
+        _nestHolding.Add(new HeldNestPart
+        {
+            PanelId = panel.PanelId,
+            Material = panel.Material ?? "",
+            ThicknessMm = panel.ThicknessMm,
+            RotationDeg = rotDeg,
+            WidthMm = w,
+            HeightMm = h,
+        });
+    }
+
+    IReadOnlyList<DraftStockKind> DraftStockKinds()
+    {
+        if (_stockKinds.Count > 0)
+        {
+            return _stockKinds
+                .Select(k => new DraftStockKind(
+                    k.MaterialId,
+                    k.ThicknessMm,
+                    string.IsNullOrWhiteSpace(k.Label) ? k.AutoLabel : k.Label))
+                .ToList();
+        }
+
+        if (_session.Package is null) return [];
+        return _session.Package.Panels
+            .GroupBy(p => NestGroupKey.From(p.Material, p.ThicknessMm))
+            .OrderBy(g => g.Key.Material, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(g => g.Key.ThicknessMm)
+            .Select(g => new DraftStockKind(
+                g.Key.Material,
+                g.Key.ThicknessMm,
+                g.First().MaterialGroupLabel))
+            .ToList();
+    }
+
+    void AcceptDraftPanel(PanelPart panel)
+    {
+        if (_session.Package is null) return;
+        var sample = _session.Package.Panels.FirstOrDefault();
+        if (panel.Identity is null || string.IsNullOrWhiteSpace(panel.Identity.PackageId))
+        {
+            panel = panel.WithTree(panel.PanelId, new WorkpieceIdentity
+            {
+                PackageId = sample?.Identity?.PackageId ?? _session.Package.JobId,
+                PackageLabel = sample?.Identity?.PackageLabel ?? sample?.DisplayPackage ?? _session.Package.JobId,
+                ProjectId = sample?.Identity?.ProjectId,
+                ModuleId = panel.Identity?.ModuleId ?? "Draft",
+                WorkpieceId = panel.PanelId,
+                Role = panel.Identity?.Role ?? sample?.Identity?.Role,
+                SourceFormat = "draft",
+            });
+        }
+
+        _session.ReplacePanel(panel);
+        InvalidateManufacturingOutputs("create panel");
+        RefreshPartList(selectId: panel.PanelId);
+        RefreshStockMaterialCards();
+        SetStatus($"已加入板件 {panel.DisplayTitle} · 请确认板材后重新密排");
+    }
+
+    static T? FindAncestor<T>(DependencyObject? start) where T : DependencyObject
+    {
+        for (var d = start; d is not null; d = VisualTreeHelper.GetParent(d))
+        {
+            if (d is T hit) return hit;
+        }
+        return null;
     }
 
     void SyncStockKindChecks()
@@ -4589,6 +4947,7 @@ public partial class MainWindow : Window
                             AllowPartsInPart = kind.AllowPartsInPart,
                             Material = kind.MaterialId,
                             ThicknessMm = kind.ThicknessMm,
+                            SheetGrain = kind.SheetGrain,
                         }));
                 }
 
@@ -4606,6 +4965,7 @@ public partial class MainWindow : Window
                     Label = kind.Label,
                     Material = kind.MaterialId,
                     ThicknessMm = kind.ThicknessMm,
+                    SheetGrain = kind.SheetGrain,
                     Blocked = matched?.DefectRegions.Select(d => new NestBlockedRect
                     {
                         MinX = d.MinX, MinY = d.MinY, MaxX = d.MaxX, MaxY = d.MaxY,
@@ -5602,7 +5962,7 @@ public partial class MainWindow : Window
         if (source is not DependencyObject d) return false;
         while (d is not null)
         {
-            if (d is FrameworkElement { Name: "NestCanvasChrome" or "NestSheetPrevBtn" or "NestSheetNextBtn" or "OutSimChrome" })
+            if (d is FrameworkElement { Name: "NestCanvasChrome" or "NestSheetPrevBtn" or "NestSheetNextBtn" or "NestCreatePanelBtn" or "OutSimChrome" })
                 return true;
             if (d is System.Windows.Controls.Primitives.ButtonBase)
                 return true;
@@ -6139,6 +6499,24 @@ public partial class MainWindow : Window
         if (leftHeld) return;
         if (_nest is not { Ok: true }) return;
         EnsureNestViewMetrics();
+        var holdId = HitTestHolding(_lastCanvasX, _lastCanvasY);
+        if (holdId is not null)
+        {
+            if (!_nestSelected.Contains(holdId))
+            {
+                _nestSelected.Clear();
+                _nestSelected.Add(holdId);
+                SyncPartListFromNestSelection(holdId);
+                CanvasHost.InvalidateVisual();
+            }
+            _nestContextPanelId = holdId;
+            _nestContextInHold = true;
+            ShowNestHoldContextMenu();
+            _nestRightHandled = true;
+            e.Handled = true;
+            return;
+        }
+
         var hitId = HitTestNest(_lastCanvasX, _lastCanvasY);
         if (hitId is null) return;
         if (!_nestSelected.Contains(hitId))
@@ -6149,6 +6527,7 @@ public partial class MainWindow : Window
             CanvasHost.InvalidateVisual();
         }
         _nestContextPanelId = hitId;
+        _nestContextInHold = false;
         ShowNestPartContextMenu();
         _nestRightHandled = true;
         e.Handled = true;
@@ -6172,6 +6551,148 @@ public partial class MainWindow : Window
         menu.PlacementTarget = CanvasPane;
         menu.Placement = PlacementMode.MousePoint;
         menu.IsOpen = true;
+    }
+
+    void ShowNestHoldContextMenu()
+    {
+        if (TryFindResource("NestHoldContextMenu") is not ContextMenu menu)
+            return;
+        menu.PlacementTarget = CanvasPane;
+        menu.Placement = PlacementMode.MousePoint;
+        menu.IsOpen = true;
+    }
+
+    List<string> NestContextIds()
+    {
+        var hit = _nestContextPanelId;
+        if (string.IsNullOrWhiteSpace(hit) || _session.Package is null)
+            return [];
+        var zone = _nestContextInHold
+            ? _nestHolding.Select(h => h.PanelId).ToHashSet(StringComparer.Ordinal)
+            : (_nest?.Placements.Select(p => p.PanelId).ToHashSet(StringComparer.Ordinal)
+               ?? new HashSet<string>(StringComparer.Ordinal));
+        if (_nestSelected.Contains(hit) && _nestSelected.Count > 1)
+            return _nestSelected.Where(zone.Contains).ToList();
+        return zone.Contains(hit) ? [hit] : [hit];
+    }
+
+    static string RotateGrain90(PanelPart panel)
+    {
+        var g = GrainAlign.NormalizePart(panel.GrainDirection ?? panel.Orientation?.GrainDirection);
+        return g == "X" ? "Y" : "X";
+    }
+
+    void OnNestRotateGrainClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null || _nest is not { Ok: true }) return;
+        var ids = NestContextIds();
+        if (ids.Count == 0) return;
+
+        var moved = 0;
+        foreach (var id in ids)
+        {
+            var panel = _session.Package.Panels.FirstOrDefault(p => p.PanelId == id);
+            if (panel is null) continue;
+            var next = panel.WithGrain(RotateGrain90(panel));
+            _session.ReplacePanel(next);
+            if (!_nestContextInHold)
+            {
+                if (MovePlacementToHolding(id, next, refresh: false))
+                    moved++;
+            }
+            else
+            {
+                var held = _nestHolding.FirstOrDefault(h => h.PanelId == id);
+                ParkInHolding(next, held?.RotationDeg ?? 0);
+            }
+        }
+
+        if (_selected is not null)
+            _selected = _session.Package.Panels.FirstOrDefault(p => p.PanelId == _selected.PanelId) ?? _selected;
+
+        RefreshNestUiKeepSheet(_selected?.PanelId, _activeNestSheet);
+        RefreshStockMaterialCards();
+        SetStatus(_nestContextInHold
+            ? $"已转纹路 90° · {ids.Count} 件 · 仍在待用区"
+            : $"已转纹路 90° · {ids.Count} 件 · {moved} 件已入待用区");
+    }
+
+    void OnNestHoldCopyClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null || _nest is not { Ok: true }) return;
+        var ids = NestContextIds();
+        if (ids.Count == 0) return;
+
+        string? lastId = null;
+        foreach (var id in ids)
+        {
+            var panel = _session.Package.Panels.FirstOrDefault(p => p.PanelId == id);
+            if (panel is null) continue;
+            var copyId = _session.NextCopyPanelId(id);
+            var copy = PanelEdit.Duplicate(panel, copyId);
+            if (!GrainAlign.HasPartGrain(copy)
+                && KindHasGrain(copy.Material, copy.ThicknessMm))
+                copy = copy.WithGrain("X");
+            _session.ReplacePanel(copy);
+            var held = _nestHolding.FirstOrDefault(h => h.PanelId == id);
+            ParkInHolding(copy, held?.RotationDeg ?? 0);
+            lastId = copyId;
+        }
+
+        if (lastId is not null)
+        {
+            _nestSelected.Clear();
+            _nestSelected.Add(lastId);
+            _selected = _session.Package.Panels.FirstOrDefault(p => p.PanelId == lastId);
+        }
+
+        RefreshNestUiKeepSheet(lastId, _activeNestSheet);
+        RefreshStockMaterialCards();
+        SetStatus($"已复制 {ids.Count} 件到待用区");
+    }
+
+    void OnNestHoldDeleteClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null) return;
+        var ids = NestContextIds();
+        if (ids.Count == 0) return;
+
+        var panels = ids
+            .Select(id => _session.Package.Panels.FirstOrDefault(p => p.PanelId == id))
+            .OfType<PanelPart>()
+            .ToList();
+        if (panels.Count == 0) return;
+
+        var anyFusion = panels.Any(p =>
+            !string.Equals(p.Identity?.SourceFormat, "draft", StringComparison.OrdinalIgnoreCase));
+        if (anyFusion)
+        {
+            var ask = MessageBox.Show(
+                this,
+                $"删除待用区 {panels.Count} 件？\n其中有从方案载入的板，删除后无法再排。",
+                "删除待用区板件",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (ask != MessageBoxResult.Yes) return;
+        }
+
+        foreach (var id in ids)
+        {
+            _session.RemovePanel(id);
+            _nestHolding.RemoveAll(h => h.PanelId == id);
+            if (_nest is not null)
+            {
+                foreach (var place in _nest.Placements.Where(p => p.PanelId == id).ToList())
+                    _nest.Placements.Remove(place);
+            }
+            _nestSelected.Remove(id);
+            _locked.Remove(id);
+        }
+
+        _selected = _session.Package.Panels.FirstOrDefault(p => p.PanelId == _selected?.PanelId);
+        RefreshNestUiKeepSheet(_selected?.PanelId, _activeNestSheet);
+        RefreshStockMaterialCards();
+        SetStatus($"已删除待用区 {ids.Count} 件");
     }
 
     void OnNestChangeMaterialClick(object sender, RoutedEventArgs e)
@@ -7322,7 +7843,8 @@ public partial class MainWindow : Window
                     FaintParts: _stage == "out",
                     OriginX: ox,
                     OriginY: oy,
-                    NcSimToolDiaMm: _stage == "out" ? ShopToolDiaByNum() : null));
+                    NcSimToolDiaMm: _stage == "out" ? ShopToolDiaByNum() : null,
+                    SheetGrain: CurrentSheetGrain()));
             return;
         }
 
@@ -7330,6 +7852,21 @@ public partial class MainWindow : Window
     }
 
     void SetStatus(string text) => StatusText.Text = text;
+
+    SheetGrainKind CurrentSheetGrain()
+    {
+        if (_session.Package is null || _nest is not { Ok: true })
+            return SheetGrainKind.None;
+        var place = _nest.Placements.FirstOrDefault(p => p.SheetIndex == _activeNestSheet);
+        var panel = place is null
+            ? null
+            : _session.Package.Panels.FirstOrDefault(p => p.PanelId == place.PanelId);
+        if (panel is null) return SheetGrainKind.None;
+        var key = NestGroupKey.From(panel.Material, panel.ThicknessMm);
+        var kind = _stockKinds.FirstOrDefault(k =>
+            NestGroupKey.From(k.MaterialId, k.ThicknessMm).Equals(key));
+        return kind?.SheetGrain ?? SheetGrainKind.None;
+    }
 
     string KindDisplayName(PanelPart panel)
     {

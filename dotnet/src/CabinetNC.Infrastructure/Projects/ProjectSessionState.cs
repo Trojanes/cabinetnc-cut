@@ -109,6 +109,7 @@ public sealed class StockKindDto
     public double SpacingMm { get; set; }
     public double BorderMm { get; set; }
     public bool AllowRotate90 { get; set; } = true;
+    public string SheetGrainKey { get; set; } = "none";
     public bool AllowPartsInPart { get; set; } = true;
     public bool UseLeftoverPieces { get; set; }
     public double LeftoverXMm { get; set; }

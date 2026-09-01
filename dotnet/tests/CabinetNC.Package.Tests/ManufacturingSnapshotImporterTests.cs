@@ -655,6 +655,88 @@ public class ManufacturingSnapshotImporterTests
     }
 
     [Fact]
+    public void Imports_fusion_material_grain_angle_as_x()
+    {
+        var json = """
+        {
+          "schema":"cabinetnc.manufacturing-snapshot",
+          "schemaVersion":"1.0.0",
+          "jobId":"GRAIN-ANGLE",
+          "units":"mm",
+          "workpieces":[
+            {
+              "workpieceId":"WP1",
+              "panelId":"Door.WG1",
+              "name":"Door.WG1",
+              "material":{
+                "materialId":"door-wood-grain-16",
+                "thicknessMm":16,
+                "decorId":"wood_grain",
+                "colorName":"Wood Grain",
+                "grainAlongMm":200,
+                "grainAngleDeg":0
+              },
+              "geometry":{
+                "quality":"tessellated",
+                "toleranceMm":0.1,
+                "outerProfile":{"closed":true,"points":[[0,0],[200,0],[200,595],[0,595]]},
+                "nestingPolygon":[[0,0],[200,0],[200,595],[0,595]]
+              },
+              "faces":[{"faceId":"A","machiningPermission":"PRIMARY"}],
+              "features":[],
+              "manufacturing":{"mode":"singleSide","machiningFace":"A"}
+            }
+          ]
+        }
+        """;
+
+        var result = ManufacturingSnapshotImporter.FromJson(json);
+        Assert.True(result.Ok, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var panel = Assert.Single(result.Package!.Panels);
+        Assert.Equal("X", panel.GrainDirection);
+        Assert.Equal("X", panel.Orientation!.GrainDirection);
+    }
+
+    [Fact]
+    public void Imports_fusion_grain_along_height_as_y()
+    {
+        var json = """
+        {
+          "schema":"cabinetnc.manufacturing-snapshot",
+          "schemaVersion":"1.0.0",
+          "jobId":"GRAIN-ALONG",
+          "units":"mm",
+          "workpieces":[
+            {
+              "workpieceId":"WP1",
+              "panelId":"Door.WG2",
+              "name":"Door.WG2",
+              "material":{
+                "materialId":"door-wood-grain-16",
+                "thicknessMm":16,
+                "grainAlongMm":595
+              },
+              "geometry":{
+                "quality":"tessellated",
+                "toleranceMm":0.1,
+                "outerProfile":{"closed":true,"points":[[0,0],[200,0],[200,595],[0,595]]},
+                "nestingPolygon":[[0,0],[200,0],[200,595],[0,595]]
+              },
+              "faces":[{"faceId":"A","machiningPermission":"PRIMARY"}],
+              "features":[],
+              "manufacturing":{"mode":"singleSide","machiningFace":"A"}
+            }
+          ]
+        }
+        """;
+
+        var result = ManufacturingSnapshotImporter.FromJson(json);
+        Assert.True(result.Ok, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var panel = Assert.Single(result.Package!.Panels);
+        Assert.Equal("Y", panel.GrainDirection);
+    }
+
+    [Fact]
     public void Imports_legacy_material_without_surfaceMode_with_stable_group_label()
     {
         var json = """

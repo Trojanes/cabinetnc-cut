@@ -245,6 +245,15 @@ public sealed class ProjectSession
         return id;
     }
 
+    public string NextDraftPanelId()
+    {
+        var n = 1;
+        string id;
+        do { id = $"DRAFT-{n++}"; }
+        while (Package?.Panels.Any(p => p.PanelId.Equals(id, StringComparison.OrdinalIgnoreCase)) == true);
+        return id;
+    }
+
     public void MarkManufacturingClean() => ManufacturingDirty = false;
 
     public bool TryUndo()
