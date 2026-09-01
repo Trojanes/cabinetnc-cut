@@ -969,9 +969,11 @@ public partial class MainWindow : Window
             else
             {
                 var pose = NcCutSim.At(_ncSimStrokes, _ncSimTime);
+                var shop = ShopToolDiaByNum();
+                var dia = NcCutSim.ToolDiameterMm(pose.ToolNum, shop);
                 OutSimMeta.Text = pose.StrokeIndex < 0
-                    ? "滚轮缩放 · 中键平移 · 双击中键复位"
-                    : $"T{pose.ToolNum}  Z{pose.Z:0.##}  F{pose.Feed:0}  ·  滚轮缩放 · 中键平移";
+                    ? "线宽=刀径 · 滚轮缩放 · 中键平移 · 双击中键复位"
+                    : $"T{pose.ToolNum} Ø{dia:0.##}  Z{pose.Z:0.##}  F{pose.Feed:0}  ·  线宽=刀径";
             }
         }
         if (OutSimTime is not null)
@@ -1830,6 +1832,20 @@ public partial class MainWindow : Window
         var h = ParseMm(StockLengthBox.Text, pkgSheet?.LengthMm > 0 ? pkgSheet.LengthMm : 2400);
         var fallbackTh = _session.Package?.Panels.FirstOrDefault()?.ThicknessMm ?? 18;
         return (w, h, fallbackTh > 0 ? fallbackTh : 18);
+    }
+
+    IReadOnlyDictionary<int, double> ShopToolDiaByNum()
+    {
+        var map = new Dictionary<int, double>();
+        foreach (var t in _library.Tools)
+        {
+            if (t.DiameterMm <= 0 || string.IsNullOrWhiteSpace(t.Id)) continue;
+            var id = t.Id.Trim();
+            if (id.Length >= 2 && (id[0] is 'T' or 't')
+                && int.TryParse(id.AsSpan(1), out var n) && n > 0)
+                map[n] = t.DiameterMm;
+        }
+        return map;
     }
 
     double ToolDiameterOf(CutOp op)
@@ -3758,6 +3774,76 @@ public partial class MainWindow : Window
         InvalidateManufacturingOutputs("delete panel");
         RefreshPartList(selectId: null);
         SetStatus($"已删除板件 {id}");
+    }
+
+    void OnPackageGroupRightUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_stage == "stock")
+        {
+            e.Handled = true;
+            if (sender is FrameworkElement fe && fe.ContextMenu is { } menu)
+                menu.IsOpen = false;
+        }
+    }
+
+    void OnPackageGroupMenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (_stage == "stock" && sender is ContextMenu menu)
+            menu.IsOpen = false;
+    }
+
+    void OnRemovePackageClick(object sender, RoutedEventArgs e)
+    {
+        if (_stage == "stock" || _session.Package is null) return;
+        var group = PackageGroupFromMenu(sender);
+        var name = group?.Name?.ToString();
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var n = _session.Package.Panels.Count(p => PackageMerge.MatchesKey(p, name));
+        if (n == 0) return;
+        var confirm = MessageBox.Show(
+            this,
+            $"移出「{name}」及其 {n} 块板？\n密排和刀路会作废。磁盘上的 .cnjob 不会删除。",
+            "移出方案",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.Yes) return;
+
+        if (!_session.TryRemovePackage(name))
+        {
+            SetStatus($"未找到方案 {name}");
+            return;
+        }
+
+        ClearManufacturingState();
+        if (_session.Package is null)
+        {
+            _stageChanging = true;
+            StageTabs.SelectedIndex = 0;
+            _stage = "load";
+            _stageChanging = false;
+            BindPackage();
+            ApplyStageVisibility();
+            UpdateStageChrome();
+            SetStatus($"已移出方案 {name}");
+            return;
+        }
+
+        InvalidateManufacturingOutputs("remove package");
+        BindPackage();
+        SetStatus($"已移出方案 {name} · 共 {_session.Package.Panels.Count} 块板");
+    }
+
+    static CollectionViewGroup? PackageGroupFromMenu(object sender)
+    {
+        var menu = (sender as MenuItem)?.Parent as ContextMenu;
+        var start = menu?.PlacementTarget as DependencyObject ?? sender as DependencyObject;
+        for (var d = start; d is not null; d = VisualTreeHelper.GetParent(d))
+        {
+            if (d is FrameworkElement { DataContext: CollectionViewGroup group })
+                return group;
+        }
+        return null;
     }
 
     void CopySelectedToClipboard()
@@ -7235,7 +7321,8 @@ public partial class MainWindow : Window
                     NcSimTimeSec: _ncSimTime,
                     FaintParts: _stage == "out",
                     OriginX: ox,
-                    OriginY: oy));
+                    OriginY: oy,
+                    NcSimToolDiaMm: _stage == "out" ? ShopToolDiaByNum() : null));
             return;
         }
 

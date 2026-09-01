@@ -309,7 +309,13 @@
                               <Setter.Value>
                                 <ControlTemplate TargetType="{x:Type GroupItem}">
                                   <Expander IsExpanded="True" Margin="0,6,0,2"
-                                            Foreground="#12314F" FontSize="12" FontWeight="Bold">
+                                            Foreground="#12314F" FontSize="12" FontWeight="Bold"
+                                            PreviewMouseRightButtonUp="OnPackageGroupRightUp">
+                                    <Expander.ContextMenu>
+                                      <ContextMenu Opened="OnPackageGroupMenuOpened">
+                                        <MenuItem Header="移出这份方案…" Click="OnRemovePackageClick" />
+                                      </ContextMenu>
+                                    </Expander.ContextMenu>
                                     <Expander.Header>
                                       <DockPanel>
                                         <CheckBox DockPanel.Dock="Left"
@@ -460,7 +466,7 @@
                                  FontSize="12" FontWeight="SemiBold" />
                       <TextBlock x:Name="OutSimMeta" HorizontalAlignment="Right" VerticalAlignment="Center"
                                  FontSize="11" Foreground="#666"
-                                 Text="虚线空程 · 橙=留 0.5 · 蓝=通切" />
+                                 Text="虚线空程 · 线宽=刀径 · 橙=留 0.5 · 蓝=通切" />
                     </Grid>
                   </Border>
                   <Border VerticalAlignment="Bottom" Background="#F7F7F7" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0" Padding="8,6">

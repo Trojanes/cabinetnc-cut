@@ -215,6 +215,26 @@ public sealed class ProjectSession
         ManufacturingDirty = true;
     }
 
+    /// <summary>Unload one imported .cnjob from the merged nest list. Last package clears the session.</summary>
+    public bool TryRemovePackage(string packageKey)
+    {
+        if (Package is null || string.IsNullOrWhiteSpace(packageKey))
+            return false;
+        var next = PackageMerge.Remove(Package, packageKey);
+        if (ReferenceEquals(next, Package))
+            return false;
+        if (next.Panels.Count == 0)
+        {
+            Clear();
+            return true;
+        }
+        History.PushBeforeEdit(PackageJson ?? CutPackageJson.Serialize(Package));
+        Package = next;
+        PackageJson = CutPackageJson.Serialize(Package);
+        ManufacturingDirty = true;
+        return true;
+    }
+
     public string NextCopyPanelId(string baseId)
     {
         if (Package is null) return $"{baseId}_copy";

@@ -191,7 +191,8 @@ static class CanvasPainter
         double NcSimTimeSec = 0,
         bool FaintParts = false,
         float? OriginX = null,
-        float? OriginY = null);
+        float? OriginY = null,
+        IReadOnlyDictionary<int, double>? NcSimToolDiaMm = null);
 
     public static void PaintNest(
         SKCanvas canvas,
@@ -426,7 +427,7 @@ static class CanvasPainter
             PaintBridges(canvas, bridges, ToSx, ToSy, scale, opts.ActiveSheetIndex);
 
         if (opts.NcSimStrokes is { Count: > 0 } sim)
-            PaintNcSim(canvas, sim, opts.NcSimTimeSec, ToSx, ToSy, scale);
+            PaintNcSim(canvas, sim, opts.NcSimTimeSec, ToSx, ToSy, scale, opts.NcSimToolDiaMm);
 
         if (opts.HoldingBayLeft > 0 && opts.HoldingBayLeft < w - 4)
             PaintHoldingBay(
@@ -927,7 +928,8 @@ static class CanvasPainter
         double timeSec,
         Func<double, float> toSx,
         Func<double, float> toSy,
-        float scale)
+        float scale,
+        IReadOnlyDictionary<int, double>? shopDia = null)
     {
         var pose = NcCutSim.At(strokes, timeSec);
 
@@ -936,23 +938,23 @@ static class CanvasPainter
             var s = strokes[i];
             if (i > pose.StrokeIndex)
             {
-                DrawNcStroke(canvas, s, 0, 1, false, toSx, toSy, scale);
+                DrawNcStroke(canvas, s, 0, 1, false, toSx, toSy, scale, shopDia);
                 continue;
             }
 
             if (i == pose.StrokeIndex && pose.Along < 1 - 1e-6)
             {
                 if (pose.Along > 1e-6)
-                    DrawNcStroke(canvas, s, 0, pose.Along, true, toSx, toSy, scale);
-                DrawNcStroke(canvas, s, pose.Along, 1, false, toSx, toSy, scale);
+                    DrawNcStroke(canvas, s, 0, pose.Along, true, toSx, toSy, scale, shopDia);
+                DrawNcStroke(canvas, s, pose.Along, 1, false, toSx, toSy, scale, shopDia);
                 continue;
             }
 
-            DrawNcStroke(canvas, s, 0, 1, true, toSx, toSy, scale);
+            DrawNcStroke(canvas, s, 0, 1, true, toSx, toSy, scale, shopDia);
         }
 
         if (pose.StrokeIndex < 0) return;
-        var r = Math.Max(3.2f, (float)(NcCutSim.ToolDiameterMm(pose.ToolNum) * 0.5 * scale));
+        var r = Math.Max(3.2f, (float)(NcCutSim.ToolDiameterMm(pose.ToolNum, shopDia) * 0.5 * scale));
         var cx = toSx(pose.X);
         var cy = toSy(pose.Y);
         var fillC = pose.Rapid
@@ -980,7 +982,8 @@ static class CanvasPainter
         bool done,
         Func<double, float> toSx,
         Func<double, float> toSy,
-        float scale)
+        float scale,
+        IReadOnlyDictionary<int, double>? shopDia = null)
     {
         a0 = Math.Clamp(a0, 0, 1);
         a1 = Math.Clamp(a1, 0, 1);
@@ -991,26 +994,24 @@ static class CanvasPainter
         var color = kind switch
         {
             NcCutSim.StrokeKind.Leave => done
-                ? new SKColor(0xE6, 0x7E, 0x22)
-                : new SKColor(0xE6, 0x7E, 0x22, 0x55),
+                ? new SKColor(0xE6, 0x7E, 0x22, 0xB8)
+                : new SKColor(0xE6, 0x7E, 0x22, 0x40),
             NcCutSim.StrokeKind.Through => done
-                ? new SKColor(0x0B, 0x4F, 0x8C)
-                : new SKColor(0x1A, 0x6B, 0xB5, 0x55),
+                ? new SKColor(0x0B, 0x4F, 0x8C, 0xB8)
+                : new SKColor(0x1A, 0x6B, 0xB5, 0x40),
             _ => done
                 ? new SKColor(0x88, 0x88, 0x88)
                 : new SKColor(0xBB, 0xBB, 0xBB, 0x90),
         };
-        var dia = NcCutSim.ToolDiameterMm(s.ToolNum);
-        var sw = rapid
-            ? 1.15f
-            : Math.Clamp((float)(dia * scale * 0.55), 1.4f, 9f);
+        var dia = NcCutSim.ToolDiameterMm(s.ToolNum, shopDia);
+        var sw = NcCutSim.CutStrokeWidthPx(s.ToolNum, scale, rapid, shopDia);
 
         if (!s.Arc && s.XyLen < 0.2)
         {
             if (!done) return;
             var tip = NcCutSim.PointAlong(s, a1);
             using var tick = new SKPaint { Color = color, IsAntialias = true };
-            canvas.DrawCircle(toSx(tip.X), toSy(tip.Y), Math.Max(1.8f, sw * 0.7f), tick);
+            canvas.DrawCircle(toSx(tip.X), toSy(tip.Y), Math.Max(1.8f, (float)(dia * 0.5 * scale)), tick);
             return;
         }
 

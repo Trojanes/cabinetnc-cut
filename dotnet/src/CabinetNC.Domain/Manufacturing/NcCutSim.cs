@@ -78,11 +78,25 @@ public static class NcCutSim
         return StrokeKind.Through;
     }
 
-    public static double ToolDiameterMm(int toolNum)
+    public static double ToolDiameterMm(int toolNum, IReadOnlyDictionary<int, double>? shop = null)
     {
+        if (shop is not null && shop.TryGetValue(toolNum, out var shopDia) && shopDia > 0)
+            return shopDia;
         if (ToolCatalog.DefaultMap().TryGetValue("T" + toolNum, out var t) && t.DiameterMm > 0)
             return t.DiameterMm;
         return toolNum == 3 ? 3 : toolNum == 1 ? TroyRecipe.TongueDiameterMm : TroyRecipe.WorkDiameterMm;
+    }
+
+    /// <summary>Export-sim stroke width in px: rapids stay thin; cuts are true tool diameter.</summary>
+    public static float CutStrokeWidthPx(
+        int toolNum,
+        float scalePxPerMm,
+        bool rapid,
+        IReadOnlyDictionary<int, double>? shop = null)
+    {
+        if (rapid) return 1.15f;
+        var dia = ToolDiameterMm(toolNum, shop);
+        return Math.Max(1.2f, (float)(dia * Math.Max(0, scalePxPerMm)));
     }
 
     public static Pose At(IReadOnlyList<ToolStroke> strokes, double tSec)

@@ -103,4 +103,14 @@ public class NcCutSimTests
         Assert.Equal(6.35, NcCutSim.ToolDiameterMm(1));
         Assert.Equal(3, NcCutSim.ToolDiameterMm(3));
     }
+
+    [Fact]
+    public void CutStrokeWidthPx_matches_true_tool_diameter()
+    {
+        Assert.Equal(1.15f, NcCutSim.CutStrokeWidthPx(2, 2f, rapid: true));
+        Assert.Equal(20f, NcCutSim.CutStrokeWidthPx(2, 2f, rapid: false));
+        var shop = new Dictionary<int, double> { [2] = 12 };
+        Assert.Equal(24f, NcCutSim.CutStrokeWidthPx(2, 2f, rapid: false, shop));
+        Assert.Equal(12f, NcCutSim.ToolDiameterMm(2, shop));
+    }
 }
