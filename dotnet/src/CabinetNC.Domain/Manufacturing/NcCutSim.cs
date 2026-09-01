@@ -24,8 +24,31 @@ public static class NcCutSim
         double Feed,
         bool Done);
 
-    public static double LengthMm(ToolStroke s) =>
-        Math.Sqrt(s.Dx * s.Dx + s.Dy * s.Dy + s.Dz * s.Dz);
+    public static double LengthMm(ToolStroke s)
+    {
+        var xy = ArcLengthXy(s);
+        return Math.Sqrt(xy * xy + s.Dz * s.Dz);
+    }
+
+    public static double ArcLengthXy(ToolStroke s)
+    {
+        if (s.Arc && s.R is double r && r > 1e-6
+            && OsaiTroyParser.TryArcSweep(s.X0, s.Y0, s.X1, s.Y1, r, s.Cw, out _, out _, out _, out var sweep))
+            return Math.Abs(r * sweep);
+        return s.XyLen;
+    }
+
+    public static (double X, double Y, double Z) PointAlong(ToolStroke s, double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        if (s.Arc && s.R is double r && r > 1e-6
+            && OsaiTroyParser.TryArcSweep(s.X0, s.Y0, s.X1, s.Y1, r, s.Cw, out var cx, out var cy, out var a0, out var sweep))
+        {
+            var a = a0 + sweep * t;
+            return (cx + Math.Abs(r) * Math.Cos(a), cy + Math.Abs(r) * Math.Sin(a), s.Z0 + s.Dz * t);
+        }
+        return (s.X0 + s.Dx * t, s.Y0 + s.Dy * t, s.Z0 + s.Dz * t);
+    }
 
     public static double DurationSec(ToolStroke s)
     {
@@ -86,10 +109,11 @@ public static class NcCutSim
             var along = d > 1e-12 ? Math.Clamp((tSec - acc) / d, 0, 1) : 1;
             if (last && tSec >= acc + d)
                 along = 1;
+            var p = PointAlong(s, along);
             return new Pose(
-                s.X0 + s.Dx * along,
-                s.Y0 + s.Dy * along,
-                s.Z0 + s.Dz * along,
+                p.X,
+                p.Y,
+                p.Z,
                 i,
                 along,
                 s.Rapid,

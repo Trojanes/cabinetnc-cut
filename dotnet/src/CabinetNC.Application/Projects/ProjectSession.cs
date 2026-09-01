@@ -188,6 +188,23 @@ public sealed class ProjectSession
         return true;
     }
 
+    public bool TryChangePanelMaterials(
+        IReadOnlyList<string> panelIds,
+        NestGroupKey target,
+        BlindFeatureDepthPolicy blindPolicy)
+    {
+        if (Package is null || panelIds.Count == 0)
+            return false;
+        var next = MaterialCorrect.RetargetPanels(Package, panelIds, target, blindPolicy);
+        if (ReferenceEquals(next, Package))
+            return false;
+        History.PushBeforeEdit(PackageJson ?? CutPackageJson.Serialize(Package));
+        Package = next;
+        PackageJson = CutPackageJson.Serialize(Package);
+        ManufacturingDirty = true;
+        return true;
+    }
+
     public void RemovePanel(string panelId, bool recordHistory = true)
     {
         if (Package is null) return;

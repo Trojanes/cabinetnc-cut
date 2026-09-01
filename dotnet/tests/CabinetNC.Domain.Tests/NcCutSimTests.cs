@@ -72,6 +72,31 @@ public class NcCutSimTests
     }
 
     [Fact]
+    public void Replay_keeps_g2_as_one_arc_and_pose_follows_the_circle()
+    {
+        var nc = """
+            G90
+            M6 T2
+            G0 X15.0000 Y10.0000 Z30.0000
+            G1 Z0.5000 F1000.0
+            G2 X10.0000 Y15.0000 R5.0000 F12000.0
+            M30
+            """;
+        var replay = OsaiTroyParser.Replay(nc);
+        var arc = Assert.Single(replay.Strokes, s => s.Arc);
+        Assert.True(arc.Cw);
+        Assert.Equal(5, arc.R);
+        Assert.InRange(NcCutSim.ArcLengthXy(arc), 7.84, 7.87);
+
+        var idx = replay.Strokes.ToList().IndexOf(arc);
+        var t0 = replay.Strokes.Take(idx).Sum(NcCutSim.DurationSec);
+        var pose = NcCutSim.At(replay.Strokes, t0 + NcCutSim.DurationSec(arc) * 0.5);
+        Assert.InRange(pose.X, 11.45, 11.48);
+        Assert.InRange(pose.Y, 11.45, 11.48);
+        Assert.InRange(Math.Sqrt((pose.X - 15) * (pose.X - 15) + (pose.Y - 15) * (pose.Y - 15)), 4.99, 5.01);
+    }
+
+    [Fact]
     public void ToolDiameter_reads_catalog()
     {
         Assert.Equal(10, NcCutSim.ToolDiameterMm(2));

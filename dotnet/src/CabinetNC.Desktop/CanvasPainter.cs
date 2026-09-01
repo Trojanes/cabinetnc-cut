@@ -166,6 +166,8 @@ static class CanvasPainter
         int ActiveSheetIndex = 0,
         IReadOnlyList<(double X, double Y)>? GuillotinePolyline = null,
         string? GuillotineLabel = null,
+        IReadOnlyList<(IReadOnlyList<(double X, double Y)> Poly, string? Label)>? GuillotineCuts = null,
+        IReadOnlyList<(double X, double Y, string Text)>? GuillotinePieceLabels = null,
         float HoldingBayLeft = 0,
         IReadOnlyList<NestHoldingItem>? HoldingItems = null,
         IReadOnlyList<NestHoldingRegion>? HoldingRegions = null,
@@ -360,16 +362,11 @@ static class CanvasPainter
         if (drawList.Count == 0)
             DrawText(canvas, $"本张大板无摆位（第 {sheetIdx + 1} 张）", ox + 8, oy + 20, 12, new SKColor(0x66, 0x66, 0x66));
 
-        if (opts.GuillotinePolyline is { Count: >= 2 } gpoly)
+        var gCuts = opts.GuillotineCuts;
+        if (gCuts is null && opts.GuillotinePolyline is { Count: >= 2 } gpoly)
+            gCuts = [(gpoly, opts.GuillotineLabel)];
+        if (gCuts is { Count: > 0 })
         {
-            using var path = new SKPath();
-            for (var i = 0; i < gpoly.Count; i++)
-            {
-                var sx = ToSx(gpoly[i].X);
-                var sy = ToSy(gpoly[i].Y);
-                if (i == 0) path.MoveTo(sx, sy);
-                else path.LineTo(sx, sy);
-            }
             using var stroke = new SKPaint
             {
                 Color = new SKColor(0xC4, 0x5A, 0x00),
@@ -378,15 +375,36 @@ static class CanvasPainter
                 IsAntialias = true,
                 PathEffect = SKPathEffect.CreateDash([10f, 6f], 0),
             };
-            canvas.DrawPath(path, stroke);
-            // Endpoint markers
             using var mark = new SKPaint { Color = new SKColor(0xC4, 0x5A, 0x00), IsAntialias = true };
-            foreach (var p in gpoly)
-                canvas.DrawCircle(ToSx(p.X), ToSy(p.Y), 3.5f, mark);
-            if (!string.IsNullOrWhiteSpace(opts.GuillotineLabel))
+            foreach (var (poly, label) in gCuts)
             {
-                var mid = gpoly[gpoly.Count / 2];
-                DrawText(canvas, opts.GuillotineLabel!, ToSx(mid.X) + 6, ToSy(mid.Y) - 6, 11,
+                if (poly.Count < 2) continue;
+                using var path = new SKPath();
+                for (var i = 0; i < poly.Count; i++)
+                {
+                    var sx = ToSx(poly[i].X);
+                    var sy = ToSy(poly[i].Y);
+                    if (i == 0) path.MoveTo(sx, sy);
+                    else path.LineTo(sx, sy);
+                }
+                canvas.DrawPath(path, stroke);
+                foreach (var p in poly)
+                    canvas.DrawCircle(ToSx(p.X), ToSy(p.Y), 3.5f, mark);
+                if (!string.IsNullOrWhiteSpace(label) && opts.GuillotinePieceLabels is not { Count: > 0 })
+                {
+                    var mid = poly[poly.Count / 2];
+                    DrawText(canvas, label!, ToSx(mid.X) + 6, ToSy(mid.Y) - 6, 11,
+                        new SKColor(0x8A, 0x3E, 0x00), bold: true);
+                }
+            }
+        }
+
+        if (opts.GuillotinePieceLabels is { Count: > 0 } pieceLabels)
+        {
+            foreach (var (x, y, text) in pieceLabels)
+            {
+                if (string.IsNullOrWhiteSpace(text)) continue;
+                DrawText(canvas, text, ToSx(x), ToSy(y), 11,
                     new SKColor(0x8A, 0x3E, 0x00), bold: true);
             }
         }
@@ -968,10 +986,6 @@ static class CanvasPainter
         a1 = Math.Clamp(a1, 0, 1);
         if (a1 - a0 < 1e-6) return;
 
-        var x0 = s.X0 + s.Dx * a0;
-        var y0 = s.Y0 + s.Dy * a0;
-        var x1 = s.X0 + s.Dx * a1;
-        var y1 = s.Y0 + s.Dy * a1;
         var kind = NcCutSim.KindOf(s);
         var rapid = kind == NcCutSim.StrokeKind.Rapid;
         var color = kind switch
@@ -991,11 +1005,12 @@ static class CanvasPainter
             ? 1.15f
             : Math.Clamp((float)(dia * scale * 0.55), 1.4f, 9f);
 
-        if (s.XyLen < 0.2)
+        if (!s.Arc && s.XyLen < 0.2)
         {
             if (!done) return;
+            var tip = NcCutSim.PointAlong(s, a1);
             using var tick = new SKPaint { Color = color, IsAntialias = true };
-            canvas.DrawCircle(toSx(x1), toSy(y1), Math.Max(1.8f, sw * 0.7f), tick);
+            canvas.DrawCircle(toSx(tip.X), toSy(tip.Y), Math.Max(1.8f, sw * 0.7f), tick);
             return;
         }
 
@@ -1010,7 +1025,41 @@ static class CanvasPainter
             StrokeJoin = SKStrokeJoin.Round,
             PathEffect = dash,
         };
-        canvas.DrawLine(toSx(x0), toSy(y0), toSx(x1), toSy(y1), paint);
+        if (s.Arc && s.R is double rad && rad > 1e-6
+            && OsaiTroyParser.TryArcSweep(s.X0, s.Y0, s.X1, s.Y1, rad, s.Cw, out var cx, out var cy, out _, out _))
+        {
+            var p0 = NcCutSim.PointAlong(s, a0);
+            var p1 = NcCutSim.PointAlong(s, a1);
+            var mid = NcCutSim.PointAlong(s, (a0 + a1) * 0.5);
+            var scx = toSx(cx);
+            var scy = toSy(cy);
+            var rx = Math.Abs(toSx(cx + rad) - scx);
+            var ry = Math.Abs(toSy(cy + rad) - scy);
+            if (rx > 0.5f && ry > 0.5f)
+            {
+                float Ang(double x, double y) =>
+                    (float)(Math.Atan2(toSy(y) - scy, toSx(x) - scx) * 180 / Math.PI);
+                static float CwDelta(float from, float to)
+                {
+                    var d = to - from;
+                    while (d < 0) d += 360;
+                    while (d >= 360) d -= 360;
+                    return d;
+                }
+                var sa = Ang(p0.X, p0.Y);
+                var sweepCw = CwDelta(sa, Ang(p1.X, p1.Y));
+                var midCw = CwDelta(sa, Ang(mid.X, mid.Y));
+                var sweep = midCw <= sweepCw + 1 ? sweepCw : sweepCw - 360;
+                using var path = new SKPath();
+                path.MoveTo(toSx(p0.X), toSy(p0.Y));
+                path.ArcTo(new SKRect(scx - rx, scy - ry, scx + rx, scy + ry), sa, sweep, false);
+                canvas.DrawPath(path, paint);
+                return;
+            }
+        }
+        var a = NcCutSim.PointAlong(s, a0);
+        var b = NcCutSim.PointAlong(s, a1);
+        canvas.DrawLine(toSx(a.X), toSy(a.Y), toSx(b.X), toSy(b.Y), paint);
     }
 
     static void DrawHoldPreview(

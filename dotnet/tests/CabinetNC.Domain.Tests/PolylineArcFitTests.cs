@@ -21,6 +21,33 @@ public class PolylineArcFitTests
     }
 
     [Fact]
+    public void Dirty_clipper_corner_snaps_g1_to_true_tangents()
+    {
+        // Shop NC: G1 to (13.83, 10.14) then G2 R5 to (10, 15) — CAD has no step.
+        var path = new List<(double X, double Y)> { (847.0000, 10.0000) };
+        const double cx = 15, cy = 15, r = 5;
+        var a0 = Math.Atan2(10.1382 - cy, 13.8328 - cx);
+        var a1 = Math.Atan2(15.0000 - cy, 10.0000 - cx);
+        var sweep = a1 - a0;
+        while (sweep > 0) sweep -= 2 * Math.PI;
+        for (var i = 0; i <= 12; i++)
+        {
+            var a = a0 + sweep * (i / 12d);
+            path.Add((cx + r * Math.Cos(a), cy + r * Math.Sin(a)));
+        }
+        path.Add((10.1382, 495.1672));
+        var segs = PolylineArcFit.Fit(path, closed: false);
+        var arc = Assert.Single(segs, s => s.Arc);
+        Assert.Equal(5, arc.R, 3);
+        var incoming = segs[segs.ToList().IndexOf(arc) - 1];
+        Assert.False(incoming.Arc);
+        Assert.InRange(incoming.X, 14.98, 15.02);
+        Assert.InRange(incoming.Y, 9.98, 10.02);
+        Assert.InRange(arc.X, 9.98, 10.02);
+        Assert.InRange(arc.Y, 14.98, 15.02);
+    }
+
+    [Fact]
     public void Tessellated_quarter_becomes_one_arc_R5()
     {
         var segs = PolylineArcFit.Fit(Quarter(cw: false), closed: false);
@@ -183,6 +210,70 @@ public class PolylineArcFitTests
     }
 
     [Fact]
+    public void Bulvd1_two_chord_R165_corner_is_one_arc()
+    {
+        // _16-class BULVD1 N280–N306: Fusion sent the designed corner as two
+        // long G1s. Circle through the three vertices is R165 / 92°.
+        (double X, double Y)[] corner =
+        [
+            (154.6551, 1193.4933),
+            (165.3807, 1068.3827),
+            (268.2250, 984.5500),
+        ];
+        var segs = PolylineArcFit.Fit(corner, closed: false);
+        var arc = Assert.Single(segs, s => s.Arc);
+        Assert.InRange(arc.R, 160, 170);
+        Assert.InRange(arc.X, 268.2, 268.3);
+        Assert.InRange(arc.Y, 984.5, 984.6);
+    }
+
+    [Fact]
+    public void Bulvd1_corner_between_straights_stays_one_arc()
+    {
+        const double cx = 312.6266, cy = 1144.0210;
+        (double X, double Y) p1 = (154.6551, 1193.4933);
+        (double X, double Y) p2 = (165.3807, 1068.3827);
+        (double X, double Y) p3 = (268.2250, 984.5500);
+        (double X, double Y) Tangent((double X, double Y) p)
+        {
+            var rx = p.X - cx;
+            var ry = p.Y - cy;
+            var len = Math.Sqrt(rx * rx + ry * ry);
+            return (-ry / len, rx / len);
+        }
+        var t1 = Tangent(p1);
+        var t3 = Tangent(p3);
+        (double X, double Y)[] path =
+        [
+            (p1.X - 80 * t1.X, p1.Y - 80 * t1.Y),
+            p1, p2, p3,
+            (p3.X + 80 * t3.X, p3.Y + 80 * t3.Y),
+        ];
+        var segs = PolylineArcFit.Fit(path, closed: false);
+        var arc = Assert.Single(segs, s => s.Arc);
+        Assert.InRange(arc.R, 160, 170);
+    }
+
+    [Fact]
+    public void Bulvd1_three_chord_R1714_bow_is_one_arc()
+    {
+        // d16_1_BULVD1 N133–N135: Fusion tessellated the designed hypot as
+        // three G1s. Circle is R1714 / 40° / sagitta ~104 — must stay an arc
+        // or the toolpath chords off the CAD edge.
+        (double X, double Y)[] bow =
+        [
+            (10.2102, 346.4345),
+            (357.0520, 1128.1061),
+            (590.9163, 1370.2509),
+        ];
+        var segs = PolylineArcFit.Fit(bow, closed: false);
+        var arc = Assert.Single(segs, s => s.Arc);
+        Assert.InRange(arc.R, 1650, 1780);
+        Assert.InRange(arc.X, 590.9, 591.0);
+        Assert.InRange(arc.Y, 1370.2, 1370.3);
+    }
+
+    [Fact]
     public void Leftover_R70_forty_degree_bow_stays_G1()
     {
         // _02.anc N51: leftover run after a tab, fitted as G2 R69.8355.
@@ -244,7 +335,31 @@ public class NcEmitterTroyArcTests
         Assert.Contains("R5.0000", nc);
         Assert.True(ClimbCut.SignedArea(path) < 0, "outer climb is CW");
         Assert.True(path.Count > 8, $"round square needs corner fans, got {path.Count}");
+        var segs = PolylineArcFit.Fit(path, closed: true);
+        var pos = path[0];
+        foreach (var s in segs)
+        {
+            if (!s.Arc)
+            {
+                var len = Math.Sqrt((s.X - pos.X) * (s.X - pos.X) + (s.Y - pos.Y) * (s.Y - pos.Y));
+                Assert.True(len > 20, $"G1 stub {len:0.###}mm ({pos.X:0.##},{pos.Y:0.##})→({s.X:0.##},{s.Y:0.##})");
+            }
+            else
+            {
+                Assert.True(
+                    AlmostAxis(pos, (s.X, s.Y), 5) || AlmostQuarter(pos, (s.X, s.Y), 5),
+                    $"arc not on tool-centre tangents ({pos.X:0.##},{pos.Y:0.##})→({s.X:0.##},{s.Y:0.##})");
+            }
+            pos = (s.X, s.Y);
+        }
     }
+
+    static bool AlmostAxis((double X, double Y) a, (double X, double Y) b, double tol) =>
+        Math.Abs(a.X - b.X) < 0.02 && Math.Abs(a.Y - b.Y) > tol
+        || Math.Abs(a.Y - b.Y) < 0.02 && Math.Abs(a.X - b.X) > tol;
+
+    static bool AlmostQuarter((double X, double Y) a, (double X, double Y) b, double r) =>
+        Math.Abs(Math.Abs(a.X - b.X) - r) < 0.05 && Math.Abs(Math.Abs(a.Y - b.Y) - r) < 0.05;
 
     [Fact]
     public void Inner_window_climb_is_ccw_G3()

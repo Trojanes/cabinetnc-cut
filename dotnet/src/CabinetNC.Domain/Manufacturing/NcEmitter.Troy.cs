@@ -525,14 +525,32 @@ public static partial class NcEmitter
     {
         if (b is null || a.Count < 3 || b.Count < 3)
             return false;
-        var n = Math.Min(a.Count, b.Count);
-        var take = Math.Min(n, 8);
-        for (var i = 0; i < take; i++)
+        var aa = OpenRing(a);
+        var bb = OpenRing(b);
+        if (aa.Count < 3 || bb.Count < 3 || aa.Count != bb.Count)
+            return false;
+        var start = -1;
+        for (var i = 0; i < bb.Count; i++)
         {
-            if (!SamePoint(a[i], b[i]))
+            if (!SamePoint(aa[0], bb[i])) continue;
+            start = i;
+            break;
+        }
+        if (start < 0) return false;
+        for (var i = 0; i < aa.Count; i++)
+        {
+            if (!SamePoint(aa[i], bb[(start + i) % bb.Count]))
                 return false;
         }
-        return SamePoint(a[0], b[0]) && SamePoint(a[^1], b[^1]);
+        return true;
+    }
+
+    static List<(double X, double Y)> OpenRing(IReadOnlyList<(double X, double Y)> loop)
+    {
+        var pts = loop.ToList();
+        if (pts.Count >= 2 && SamePoint(pts[0], pts[^1]))
+            pts.RemoveAt(pts.Count - 1);
+        return pts;
     }
 
     static List<double> WalkSampleArcs(

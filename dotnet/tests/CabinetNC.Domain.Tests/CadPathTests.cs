@@ -69,4 +69,72 @@ public class CadPathTests
         Assert.Contains("R5.0000", nc);
         Assert.Contains("G1 ", nc);
     }
+
+    [Fact]
+    public void Inner_lock_cadpath_insets_caps_to_R3_not_R13()
+    {
+        var cad = LockSlotGeometry.CapsuleSegments(0, 55, 0, 16);
+        Assert.True(CadPath.TryOffset(cad, -5, roundConvex: false, out var off));
+        var arcs = off.Where(s => s.IsArc).ToList();
+        Assert.Equal(2, arcs.Count);
+        Assert.All(arcs, a => Assert.InRange(a.RadiusMm, 2.99, 3.01));
+
+        var op = new CutOp
+        {
+            Op = "contour",
+            PanelId = "P",
+            FeatureId = "LOCK",
+            ToolId = "T2",
+            Placed = true,
+            ClosePath = true,
+            Through = true,
+            ThicknessMm = 18,
+            DepthMm = 18.5,
+            Path = CadPath.ToPolyline(cad),
+            CadPath = cad,
+        };
+        var offset = ContourToolOffset.Apply([op], 5)[0];
+        Assert.NotNull(offset.CadPath);
+        Assert.All(offset.CadPath!.Where(s => s.IsArc), a => Assert.InRange(a.RadiusMm, 2.99, 3.01));
+        var nc = NcEmitter.OpsToNc([offset], MachineCatalog.Get("nesting_router_6"),
+            recipe: PostRecipe.TroyDefault());
+        Assert.Contains("R3.0000", nc);
+        Assert.DoesNotContain("R13.", nc);
+    }
+
+    [Fact]
+    public void Inner_ccw_designed_arc_shrinks_by_tool_radius()
+    {
+        const double r = 30;
+        var cad = new CadSegment[]
+        {
+            CadSegment.MakeLine(new(r, 0), new(170, 0)),
+            CadSegment.MakeArc(new(170, 0), new(200, r), new(170, r), r, cw: false),
+            CadSegment.MakeLine(new(200, r), new(200, 90)),
+            CadSegment.MakeArc(new(200, 90), new(170, 120), new(170, 90), r, cw: false),
+            CadSegment.MakeLine(new(170, 120), new(r, 120)),
+            CadSegment.MakeArc(new(r, 120), new(0, 90), new(r, 90), r, cw: false),
+            CadSegment.MakeLine(new(0, 90), new(0, r)),
+            CadSegment.MakeArc(new(0, r), new(r, 0), new(r, r), r, cw: false),
+        };
+        Assert.True(CadPath.TryOffset(cad, -5, roundConvex: false, out var off));
+        Assert.All(off.Where(s => s.IsArc), a => Assert.InRange(a.RadiusMm, 24.99, 25.01));
+    }
+
+    [Fact]
+    public void Outer_cw_designed_arc_grows_by_tool_radius()
+    {
+        const double r = 50;
+        var cad = new CadSegment[]
+        {
+            CadSegment.MakeLine(new(r, 0), new(0, 0)),
+            CadSegment.MakeLine(new(0, 0), new(0, 200)),
+            CadSegment.MakeLine(new(0, 200), new(400, 200)),
+            CadSegment.MakeLine(new(400, 200), new(400, r)),
+            CadSegment.MakeArc(new(400, r), new(400 - r, 0), new(400 - r, r), r, cw: true),
+        };
+        Assert.True(CadPath.TryOffset(cad, 5, roundConvex: true, out var off));
+        var designed = off.Where(s => s.IsArc && s.RadiusMm > 10).ToList();
+        Assert.Contains(designed, a => a.RadiusMm is >= 54.9 and <= 55.1);
+    }
 }

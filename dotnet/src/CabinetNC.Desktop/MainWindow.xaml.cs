@@ -56,7 +56,7 @@ public partial class MainWindow : Window
     StartNestingReply? _nest;
     IReadOnlyList<NestSheetSpec> _nestSheetsUsed = [];
     IReadOnlyList<PartInPartSlot> _partInPartSlots = [];
-    readonly Dictionary<int, GuillotineCutPlanner.Result> _guillotineBySheet = new();
+    readonly Dictionary<int, GuillotineCutPlanner.SheetPlan> _guillotineBySheet = new();
     readonly List<HeldNestPart> _nestHolding = [];
     List<CanvasPainter.NestHoldingItem> _holdingLayout = [];
     List<CanvasPainter.NestHoldingRegion> _holdingRegions = [];
@@ -148,6 +148,8 @@ public partial class MainWindow : Window
     double _nestStartMx, _nestStartMy, _nestOrigOx, _nestOrigOy;
     double _nestDragRotDeg;
     readonly HashSet<string> _nestSelected = new(StringComparer.Ordinal);
+    string? _nestContextPanelId;
+    readonly HashSet<string> _retargetFocusIds = new(StringComparer.Ordinal);
     readonly Dictionary<string, (double Ox, double Oy, double Rot)> _nestGroupOrig = new(StringComparer.Ordinal);
     double _holdSlideOx, _holdSlideOy;
     bool _holdSlideHasValid;
@@ -448,6 +450,12 @@ public partial class MainWindow : Window
         LeftSplitter.Visibility = _stage == "ops" ? Visibility.Collapsed : Visibility.Visible;
         StockKindPickerVisible = _stage == "stock" ? Visibility.Visible : Visibility.Collapsed;
         MergeKindsBtn.Visibility = _stage == "stock" ? Visibility.Visible : Visibility.Collapsed;
+        if (CreatePanelBtn is not null)
+        {
+            CreatePanelBtn.Visibility = _stage == "stock" && hasPkg
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
         if (_stage != "stock")
             _pickedStockKinds.Clear();
         SyncStockKindChecks();
@@ -507,7 +515,7 @@ public partial class MainWindow : Window
                 ? "载入方案: 打开 woodjob / cut-package，或从机台 .anc 反推补板"
                 : "载入方案: 左栏 Package → Assembly → 板件 · 可用「加入方案」再并一单",
             "stock" => "板材与设备: 相同板件已合并数量 · Ctrl 点选种类后可合并 · 按材料设大板",
-            "nest" => "密排: 左右翻大板 · 拖摆位 · 锁定后重排保留",
+            "nest" => "密排: 左右翻大板 · 拖摆位 · 右键改材料 · 拖动中右键转90°",
             "ops" => "刀路: 选机器 · Profiling / Area Clearance / Drilling · 计算当前板或全部",
             "out" => "导出: 点右侧刀路文件，左边看 G-code，中间看该大板刀路",
             _ => "",
@@ -1802,8 +1810,7 @@ public partial class MainWindow : Window
         {
             if (!_opsAllSheets && sheet != _activeNestSheet) continue;
             var (sw, sh, th) = SheetCamMetrics(sheet);
-            var op = GuillotineCutPlanner.ToCutOp(plan, sheet, sw, sh, th, toolDiameterMm: 10);
-            if (op is not null) ops.Add(op);
+            ops.AddRange(GuillotineCutPlanner.ToCutOps(plan, sheet, sw, sh, th, toolDiameterMm: 10));
         }
         return ops;
     }
@@ -1966,7 +1973,7 @@ public partial class MainWindow : Window
 
     void RefreshGuillotineBox()
     {
-        var n = _guillotineBySheet.Count;
+        var n = _guillotineBySheet.Values.Sum(p => p.Cuts.Count);
         var show = n > 0;
         OpsIconGuillotine.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         OpsIconGuillotineCount.Text = show ? $"{n}" : "";
@@ -2574,6 +2581,19 @@ public partial class MainWindow : Window
         SetStatus($"大板 {_activeNestSheet + 1}: {result.Message}");
     }
 
+    (double Clearance, double MinEdge) ReadGuillotineGeometry()
+    {
+        var clearance = GuillotineClearanceBox is not null
+            ? ParseMm(GuillotineClearanceBox.Text, GuillotineCutPlanner.DefaultClearanceMm)
+            : GuillotineCutPlanner.DefaultClearanceMm;
+        var minEdge = GuillotineMinEdgeBox is not null
+            ? ParseMm(GuillotineMinEdgeBox.Text, GuillotineCutPlanner.MinRemnantEdgeMm)
+            : GuillotineCutPlanner.MinRemnantEdgeMm;
+        if (clearance < 0) clearance = 0;
+        if (minEdge < 1) minEdge = GuillotineCutPlanner.MinRemnantEdgeMm;
+        return (clearance, minEdge);
+    }
+
     void OnNestGuillotineClick(object sender, RoutedEventArgs e)
     {
         if (_session.Package is null || _nest is not { Ok: true })
@@ -2595,20 +2615,21 @@ public partial class MainWindow : Window
         }
 
         var (sw, sh, _) = ActiveSheetMetrics();
-        var plan = GuillotineCutPlanner.PlanForSheet(
+        var (clearance, minEdge) = ReadGuillotineGeometry();
+        var plan = GuillotineCutPlanner.PlanSheet(
             _session.Package.Panels,
             CurrentNestPlacements(),
             _activeNestSheet,
             sw,
             sh,
-            GuillotineCutPlanner.DefaultClearanceMm,
-            GuillotineCutPlanner.MinRemnantEdgeMm);
+            clearance,
+            minEdge);
         if (plan is null)
         {
-            SetStatus($"大板 {_activeNestSheet + 1}: 无合法余料线（余料边 < {GuillotineCutPlanner.MinRemnantEdgeMm:0}mm 或已铺满）");
+            SetStatus($"大板 {_activeNestSheet + 1}: 无合法余料线（余料边 < {minEdge:0}mm 或已铺满）");
             MessageBox.Show(this,
-                $"当前大板没有可用的余料分割线。\n\n规则：距板件轮廓 {GuillotineCutPlanner.DefaultClearanceMm:0}mm；\n" +
-                $"仅横/竖/一个 L 折；余料任一边 < {GuillotineCutPlanner.MinRemnantEdgeMm:0}mm 则跳过。",
+                $"当前大板没有可用的余料。\n\n规则：距排版外包 {clearance:0}mm；\n" +
+                $"优先方料，拆开后任一边 < {minEdge:0}mm 则改留 L。",
                 "本张余料线",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -2617,6 +2638,44 @@ public partial class MainWindow : Window
 
         _guillotineBySheet[_activeNestSheet] = plan;
         SetStatus($"大板 {_activeNestSheet + 1}: {plan.Label}");
+        if (_opsOverlay.Count > 0)
+            RebuildOpsOverlay();
+        RefreshGuillotineBox();
+        CanvasHost.InvalidateVisual();
+    }
+
+    void OnNestGuillotineAllClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null || _nest is not { Ok: true })
+        {
+            SetStatus("余料线：请先完成密排");
+            return;
+        }
+
+        var (clearance, minEdge) = ReadGuillotineGeometry();
+        var places = CurrentNestPlacements();
+        var total = NestSheetCount();
+        var ok = 0;
+        var skip = 0;
+        _guillotineBySheet.Clear();
+        for (var i = 0; i < total; i++)
+        {
+            var (sw, sh, th) = SheetCamMetrics(i);
+            _ = th;
+            var plan = GuillotineCutPlanner.PlanSheet(
+                _session.Package.Panels, places, i, sw, sh, clearance, minEdge);
+            if (plan is null)
+            {
+                skip++;
+                continue;
+            }
+            _guillotineBySheet[i] = plan;
+            ok++;
+        }
+
+        SetStatus(ok == 0
+            ? $"全部余料线：{total} 张大板均无合法余料（间隙 {clearance:0} · 最短边 {minEdge:0}）"
+            : $"全部余料线：{ok} 张已生成" + (skip > 0 ? $" · {skip} 张跳过" : ""));
         if (_opsOverlay.Count > 0)
             RebuildOpsOverlay();
         RefreshGuillotineBox();
@@ -2829,6 +2888,9 @@ public partial class MainWindow : Window
             _ => _nest.Engine,
         };
         NestReportMeta.Text =
+            (_session.ManufacturingDirty
+                ? "材料已改 · 摆位仍是旧的 · 改完后点「重新密排」\n"
+                : "") +
             $"利用率 {util:0.0}%\n" +
             $"大板 {sheets} 张 · 已排 {_nest.Placements.Count} · 待用 {_nestHolding.Count} · 未排 {_nest.Unplaced.Count}\n" +
             $"面积 {used / 1e6:0.000} / {sheetArea / 1e6:0.000} m²\n" +
@@ -2970,6 +3032,25 @@ public partial class MainWindow : Window
                 RemnantAreaMm2 = kv.Value.RemnantAreaMm2,
                 RemnantMinEdgeMm = kv.Value.RemnantMinEdgeMm,
                 Polyline = kv.Value.Polyline.Select(p => new XyDto { X = p.X, Y = p.Y }).ToList(),
+                Cuts = kv.Value.Cuts.Select(c => new GuillotineCutDto
+                {
+                    Kind = c.Kind,
+                    Label = c.Label,
+                    RemnantAreaMm2 = c.RemnantAreaMm2,
+                    RemnantMinEdgeMm = c.RemnantMinEdgeMm,
+                    Polyline = c.Polyline.Select(p => new XyDto { X = p.X, Y = p.Y }).ToList(),
+                }).ToList(),
+                Pieces = kv.Value.Pieces.Select(p => new GuillotinePieceDto
+                {
+                    Shape = p.Shape,
+                    W = p.W,
+                    H = p.H,
+                    AreaMm2 = p.AreaMm2,
+                    MinEdgeMm = p.MinEdgeMm,
+                    LabelX = p.LabelX,
+                    LabelY = p.LabelY,
+                    Label = p.Label,
+                }).ToList(),
             }).ToList(),
             Cam = new ProjectCamSettings
             {
@@ -3073,13 +3154,43 @@ public partial class MainWindow : Window
         _guillotineBySheet.Clear();
         foreach (var g in state.Guillotine)
         {
-            _guillotineBySheet[g.SheetIndex] = new GuillotineCutPlanner.Result
+            var cuts = g.Cuts.Count > 0
+                ? g.Cuts.Select(c => new GuillotineCutPlanner.Result
+                {
+                    Kind = string.IsNullOrWhiteSpace(c.Kind) ? g.Kind : c.Kind,
+                    Label = c.Label,
+                    RemnantAreaMm2 = c.RemnantAreaMm2,
+                    RemnantMinEdgeMm = c.RemnantMinEdgeMm,
+                    Polyline = c.Polyline.Select(p => (p.X, p.Y)).ToList(),
+                }).ToList()
+                : g.Polyline.Count >= 2
+                    ? [new GuillotineCutPlanner.Result
+                    {
+                        Kind = g.Kind,
+                        Label = g.Label,
+                        RemnantAreaMm2 = g.RemnantAreaMm2,
+                        RemnantMinEdgeMm = g.RemnantMinEdgeMm,
+                        Polyline = g.Polyline.Select(p => (p.X, p.Y)).ToList(),
+                    }]
+                    : [];
+            if (cuts.Count == 0) continue;
+            _guillotineBySheet[g.SheetIndex] = new GuillotineCutPlanner.SheetPlan
             {
-                Kind = g.Kind,
+                Cuts = cuts,
+                Pieces = g.Pieces.Select(p => new GuillotineCutPlanner.RemnantPiece
+                {
+                    Shape = string.IsNullOrWhiteSpace(p.Shape) ? "RECT" : p.Shape,
+                    W = p.W,
+                    H = p.H,
+                    AreaMm2 = p.AreaMm2,
+                    MinEdgeMm = p.MinEdgeMm,
+                    LabelX = p.LabelX,
+                    LabelY = p.LabelY,
+                    Label = p.Label,
+                }).ToList(),
                 Label = g.Label,
                 RemnantAreaMm2 = g.RemnantAreaMm2,
                 RemnantMinEdgeMm = g.RemnantMinEdgeMm,
-                Polyline = g.Polyline.Select(p => (p.X, p.Y)).ToList(),
             };
         }
         _nestHolding.Clear();
@@ -3891,6 +4002,18 @@ public partial class MainWindow : Window
         return hit is null ? null : NestGroupKey.From(hit.Material, hit.ThicknessMm);
     }
 
+    void OnCreatePanelClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null)
+        {
+            SetStatus("请先载入方案");
+            return;
+        }
+
+        var dlg = new PanelDraftWindow { Owner = this };
+        dlg.ShowDialog();
+    }
+
     void SyncStockKindChecks()
     {
         if (MergeKindsBtn is null || PartList is null) return;
@@ -4027,8 +4150,7 @@ public partial class MainWindow : Window
         });
         try
         {
-            if (_stockKinds.Count == 0)
-                RefreshStockMaterialCards();
+            RefreshStockMaterialCards();
             var allowRot = _stockKinds.Count > 0
                 ? _stockKinds.Any(k => k.AllowRotate90)
                 : NestAllowRotChk.IsChecked == true;
@@ -4213,6 +4335,7 @@ public partial class MainWindow : Window
             }
 
             _showNest = true;
+            FocusRetargetedPlacements();
             if (_stage != "nest" && _stage != "ops")
             {
                 _stageChanging = true;
@@ -4348,6 +4471,8 @@ public partial class MainWindow : Window
         NestApplyBtn.IsEnabled = enable;
         NestStabilizeBtn.IsEnabled = enable;
         NestGuillotineBtn.IsEnabled = enable;
+        if (NestGuillotineAllBtn is not null)
+            NestGuillotineAllBtn.IsEnabled = enable;
         NestVerifyPolyBtn.IsEnabled = enable;
     }
 
@@ -5496,8 +5621,8 @@ public partial class MainWindow : Window
                 _nestDragRotDeg = _nestHolding.FirstOrDefault(h => h.PanelId == holdId)?.RotationDeg ?? 0;
                 CanvasPane.CaptureMouse();
                 SetStatus(holdIds.Count > 1
-                    ? $"从待用区拖回 {holdIds.Count} 件 · 右键旋转90° · Alt 上下左右 · S 硬约束"
-                    : $"从待用区拖回 · {holdId} · 右键旋转90° · Alt 上下左右 · S 硬约束");
+                    ? $"从待用区拖回 {holdIds.Count} 件 · 拖动中右键转90° · Alt 上下左右 · S 硬约束"
+                    : $"从待用区拖回 · {holdId} · 拖动中右键转90° · Alt 上下左右 · S 硬约束");
                 e.Handled = true;
                 return;
             }
@@ -5886,9 +6011,9 @@ public partial class MainWindow : Window
         if (!materialOk)
             SetStatus($"材料不符 · 当前大板是 {sheetKey}");
         else if (blocked)
-            SetStatus($"投影重叠或间距不足 · {packing.Count} 件 · 右键旋转90°");
+            SetStatus($"投影重叠或间距不足 · {packing.Count} 件 · 拖动中右键转90°");
         else
-            SetStatus($"投影 {packing.Count} 件 · 右键旋转90° · Alt 上下左右 · S 硬约束 · 松开放入");
+            SetStatus($"投影 {packing.Count} 件 · 拖动中右键转90° · Alt 上下左右 · S 硬约束 · 松开放入");
     }
 
     List<string> HoldingSelectedIds(string grabbedId)
@@ -5916,7 +6041,8 @@ public partial class MainWindow : Window
         CanvasPixelPos(e);
         if (_dragMode == "label")
             return;
-        if (_dragMode == "nest" && _nestDragPanelId is not null)
+        var leftHeld = Mouse.LeftButton == MouseButtonState.Pressed || _dragMode == "nest";
+        if (leftHeld && _dragMode == "nest" && _nestDragPanelId is not null)
         {
             RotateNestDragClockwise90();
             _nestRightHandled = true;
@@ -5924,22 +6050,20 @@ public partial class MainWindow : Window
             return;
         }
         if (_dragMode is not null) return;
+        if (leftHeld) return;
         if (_nest is not { Ok: true }) return;
         EnsureNestViewMetrics();
         var hitId = HitTestNest(_lastCanvasX, _lastCanvasY);
         if (hitId is null) return;
-        if (_locked.Contains(hitId))
+        if (!_nestSelected.Contains(hitId))
         {
-            SetStatus($"已锁定 · {hitId}");
-            _nestRightHandled = true;
-            e.Handled = true;
-            return;
+            _nestSelected.Clear();
+            _nestSelected.Add(hitId);
+            SyncPartListFromNestSelection(hitId);
+            CanvasHost.InvalidateVisual();
         }
-        var rotateIds = _nestSelected.Contains(hitId) && _nestSelected.Count > 1
-            ? _nestSelected.Where(id => !_locked.Contains(id)).ToList()
-            : [hitId];
-        foreach (var id in rotateIds)
-            RotateNestPlacement(id);
+        _nestContextPanelId = hitId;
+        ShowNestPartContextMenu();
         _nestRightHandled = true;
         e.Handled = true;
     }
@@ -5954,6 +6078,119 @@ public partial class MainWindow : Window
     void OnCanvasRightDown(object sender, MouseButtonEventArgs e) => OnWindowRightDown(sender, e);
 
     void OnCanvasRightUp(object sender, MouseButtonEventArgs e) => OnWindowRightUp(sender, e);
+
+    void ShowNestPartContextMenu()
+    {
+        if (TryFindResource("NestPartContextMenu") is not ContextMenu menu)
+            return;
+        menu.PlacementTarget = CanvasPane;
+        menu.Placement = PlacementMode.MousePoint;
+        menu.IsOpen = true;
+    }
+
+    void OnNestChangeMaterialClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null || _nest is not { Ok: true })
+            return;
+        var hitId = _nestContextPanelId;
+        if (string.IsNullOrWhiteSpace(hitId))
+            return;
+
+        var ids = _nestSelected.Contains(hitId) && _nestSelected.Count > 1
+            ? _nestSelected.ToList()
+            : [hitId];
+        var selectedPanels = ids
+            .Select(id => _session.Package.Panels.FirstOrDefault(p => p.PanelId == id))
+            .OfType<PanelPart>()
+            .ToList();
+        if (selectedPanels.Count == 0)
+        {
+            SetStatus("未找到板件");
+            return;
+        }
+
+        RefreshStockMaterialCards();
+        if (_stockKinds.Count == 0)
+        {
+            SetStatus("当前方案没有材料种类");
+            return;
+        }
+
+        var options = _stockKinds
+            .Select(k => new MaterialKindOption
+            {
+                Key = NestGroupKey.From(k.MaterialId, k.ThicknessMm),
+                Label = string.IsNullOrWhiteSpace(k.Label) ? k.MaterialId : k.Label.Trim(),
+                PanelCount = k.PanelCount,
+            })
+            .ToList();
+        var prefer = NestGroupKey.From(selectedPanels[0].Material, selectedPanels[0].ThicknessMm);
+        var dlg = new ChangeMaterialWindow(options, selectedPanels, prefer) { Owner = this };
+        if (dlg.ShowDialog() != true || dlg.ChosenKey is not { } target)
+            return;
+
+        if (selectedPanels.All(p => MaterialCorrect.SameKind(p, target)))
+        {
+            SetStatus("材料未改");
+            return;
+        }
+
+        if (!_session.TryChangePanelMaterials(ids, target, dlg.BlindPolicy))
+        {
+            SetStatus("改变材料失败");
+            return;
+        }
+
+        foreach (var id in ids)
+        {
+            _locked.Remove(id);
+            _retargetFocusIds.Add(id);
+        }
+
+        if (_selected is not null)
+            _selected = _session.Package.Panels.FirstOrDefault(p => p.PanelId == _selected.PanelId) ?? _selected;
+
+        _opsOverlay = [];
+        ResetProfileBridges();
+        ExitBridgeManualMode();
+        if (NcPreview is not null)
+            NcPreview.Text = "";
+
+        RefreshStockMaterialCards();
+        BindPartList(_selected?.PanelId);
+        RefreshGeomRail();
+        RefreshNestReport();
+        RefreshWorkflowDots();
+        RefreshOneClickExport();
+        CanvasHost.InvalidateVisual();
+
+        var label = options.FirstOrDefault(o => o.Key.Equals(target))?.Label ?? target.ToString();
+        SetStatus($"已改为 {label} · {selectedPanels.Count} 件 · 可继续改其他板，改完后点「重新密排」");
+    }
+
+    void FocusRetargetedPlacements()
+    {
+        if (_retargetFocusIds.Count == 0 || _nest is not { Ok: true })
+        {
+            _retargetFocusIds.Clear();
+            return;
+        }
+
+        var place = _nest.Placements.FirstOrDefault(p => _retargetFocusIds.Contains(p.PanelId));
+        if (place is not null)
+        {
+            _activeNestSheet = place.SheetIndex;
+            _nestSelected.Clear();
+            foreach (var id in _retargetFocusIds)
+            {
+                if (_nest.Placements.Any(p => p.PanelId == id))
+                    _nestSelected.Add(id);
+            }
+            SyncPartListFromNestSelection(place.PanelId);
+        }
+        _retargetFocusIds.Clear();
+        UpdateNestSheetChrome();
+    }
 
     HwndSource? _hwndSource;
 
@@ -6053,13 +6290,13 @@ public partial class MainWindow : Window
 
     string NestDragStatus(int groupCount, string? id)
     {
-        var hint = "右键旋转90° · Alt 上下左右 · S 硬约束";
+        var hint = "拖动中右键转90° · Alt 上下左右 · S 硬约束";
         if (SIsDown() && AltIsDown())
-            hint = "右键旋转90° · Alt+S 轴锁硬约束";
+            hint = "拖动中右键转90° · Alt+S 轴锁硬约束";
         else if (SIsDown())
-            hint = "右键旋转90° · S 硬约束";
+            hint = "拖动中右键转90° · S 硬约束";
         else if (AltIsDown())
-            hint = "右键旋转90° · Alt 上下左右";
+            hint = "拖动中右键转90° · Alt 上下左右";
         if (groupCount > 1)
             return $"拖动 {groupCount} 件 · {hint}";
         return $"拖摆位 {id} · {hint}";
@@ -6964,6 +7201,15 @@ public partial class MainWindow : Window
                     ActiveSheetIndex: _activeNestSheet,
                     GuillotinePolyline: _stage == "out" ? null : guill?.Polyline,
                     GuillotineLabel: _stage == "out" ? null : guill?.Label,
+                    GuillotineCuts: _stage == "out" || guill is null
+                        ? null
+                        : guill.Cuts.Select(c => (c.Polyline, c.Label)).ToList(),
+                    GuillotinePieceLabels: _stage == "out" || guill is null
+                        ? null
+                        : guill.Pieces
+                            .Where(p => !string.IsNullOrWhiteSpace(p.Label))
+                            .Select(p => (p.LabelX, p.LabelY, p.Label!))
+                            .ToList(),
                     HoldingBayLeft: _stage == "nest" ? _holdingBayLeft : 0,
                     HoldingItems: _holdingLayout,
                     HoldingRegions: _holdingRegions,

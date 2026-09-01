@@ -130,7 +130,7 @@ public static class OpsPlanner
                     IReadOnlyList<IReadOnlyList<(double X, double Y)>>? segments = null;
                     IReadOnlyList<(double X, double Y)>? finish = null;
                     var tooSmall = false;
-                    var cleared = GrooveClear.TryClear(f, toolDia);
+                    var cleared = GrooveClear.TryClear(f, toolDia, bounds);
                     if (cleared is not null)
                     {
                         if (cleared.TooSmallForTool)
@@ -239,11 +239,11 @@ public static class OpsPlanner
         if (bounds is { } panelBounds && PocketClearer.IsOffPanelArtifact(outline, panelBounds))
             return;
 
-        var toolId = ClearanceToolPick.Pick(f, clearanceLargeMinShortMm);
+        var islands = PocketClearIslands.Keep(panel, f);
+        var toolId = ClearanceToolPick.Pick(f, clearanceLargeMinShortMm, islandHoles: islands);
         var toolDia = ClearanceToolPick.DiameterOf(toolId);
         var directToSize = ClearanceToolPick.IsHingeFeature(f);
-        var holes = (f.Holes ?? [])
-            .Where(ring => ring.Count >= 3)
+        var holes = islands
             .Select(ring => (IReadOnlyList<(double X, double Y)>)ring.Select(p => (p.X, p.Y)).ToList())
             .ToList();
         var cleared = PocketClearer.Clear(new PocketClearer.PocketClearRequest
@@ -254,6 +254,7 @@ public static class OpsPlanner
             OnionSkinMm = directToSize ? 0 : PocketClearer.DefaultOnionSkinMm,
             EmitFinishLoop = !directToSize && holes.Count == 0,
             CloseClearRings = directToSize,
+            PanelBounds = bounds,
         });
         ops.Add(new CutOp
         {

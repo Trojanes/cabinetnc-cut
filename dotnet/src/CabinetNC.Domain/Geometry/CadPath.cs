@@ -359,7 +359,7 @@ public static class CadPath
         off = g;
         if (g.IsCircle && g.Center is { } cc)
         {
-            var newR = g.RadiusMm + (g.Cw ? -leftOffset : leftOffset);
+            var newR = g.RadiusMm + (g.Cw ? leftOffset : -leftOffset);
             if (newR <= 0.05) return false;
             var start = Radial(cc, g.Start, newR);
             off = g with { Start = start, End = start, RadiusMm = newR };
@@ -367,7 +367,7 @@ public static class CadPath
         }
         if (g.IsArc && g.Center is { } c && g.RadiusMm > 0)
         {
-            var newR = g.RadiusMm + (g.Cw ? -leftOffset : leftOffset);
+            var newR = g.RadiusMm + (g.Cw ? leftOffset : -leftOffset);
             if (newR <= 0.05) return false;
             off = g with
             {
