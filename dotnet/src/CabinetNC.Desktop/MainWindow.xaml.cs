@@ -812,7 +812,8 @@ public partial class MainWindow : Window
             var project = _session.ResolvedProjectName;
             var kindOrdinal = new Dictionary<NestGroupKey, int>();
             var labelPastes = _session.Package is { } pkg
-                ? LabelExport.Build(pkg.Panels, CurrentNestPlacements(), CurrentLabelOverrides(), KindDisplayName)
+                ? LabelExport.Build(pkg.Panels, CurrentNestPlacements(), CurrentLabelOverrides(),
+                    projectFallback: _session.ResolvedProjectName)
                 : [];
             foreach (var sheetGroup in _opsOverlay
                          .Where(o => o.Placed && o.Enabled)
@@ -858,7 +859,7 @@ public partial class MainWindow : Window
                 _exportFiles.Add(new ExportNcFile
                 {
                     FileName = ExportNaming.AncFileName(n, thickness, color, kind, project),
-                    Title = $"{n:00} · {ExportNaming.ThicknessToken(thickness)} · {color} · {kind} · {project}",
+                    Title = $"{ExportNaming.ThicknessToken(thickness)} · {n:00} · {color} · {kind} · {project}",
                     Detail = detail,
                     SheetIndex = sheetGroup.Key,
                     KindKey = key,
@@ -3345,18 +3346,16 @@ public partial class MainWindow : Window
             return;
         }
         var places = CurrentNestPlacements();
-        var hits = NestValidator.FindPolygonCollisions(
-            _session.Package.Panels,
-            places,
-            ParseMm(NestSpacingBox.Text, 12),
-            PipIgnorePairs());
-        var msg = hits.Count == 0
-            ? "Clipper2 多边形 + 间距校验通过"
-            : $"发现 {hits.Count} 处多边形/间距冲突：\n" +
-              string.Join("\n", hits.Take(20).Select(h => $"{h.PanelIdA} × {h.PanelIdB} · S{h.SheetIndex + 1}"));
+        var gate = CheckNestExportGate(places);
+        var gaps = gate.Errors.Where(e => e.StartsWith("poly_gap", StringComparison.Ordinal)
+            || e.StartsWith("aabb_gap", StringComparison.Ordinal)).ToList();
+        var msg = gaps.Count == 0
+            ? "密排间距校验通过（按各张大板密排间距，含 0.5 mm 容差）"
+            : $"发现 {gaps.Count} 处多边形/间距冲突：\n" +
+              string.Join("\n", gaps.Take(20));
         SetStatus(msg.Replace("\n", " · "));
-        MessageBox.Show(this, msg, hits.Count == 0 ? "排版校验通过" : "排版校验失败",
-            MessageBoxButton.OK, hits.Count == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        MessageBox.Show(this, msg, gaps.Count == 0 ? "排版校验通过" : "排版校验失败",
+            MessageBoxButton.OK, gaps.Count == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
         CanvasHost.InvalidateVisual();
     }
 
@@ -3434,7 +3433,7 @@ public partial class MainWindow : Window
         var hits = NestValidator.FindPolygonCollisions(
             _session.Package.Panels,
             places,
-            ActiveSheetSpacingMm(),
+            NestExportGate.EffectiveClearance(ActiveSheetSpacingMm()),
             PipIgnorePairs());
         var set = new HashSet<string>(StringComparer.Ordinal);
         foreach (var h in hits)
@@ -3524,16 +3523,7 @@ public partial class MainWindow : Window
         var gateOk = true;
         if (full && _session.Package is not null)
         {
-            var spacing = _stockKinds.Count > 0
-                ? _stockKinds.Min(k => k.SpacingMm)
-                : ParseMm(NestSpacingBox.Text, 12);
-            var gate = NestExportGate.Check(
-                _session.Package.Panels,
-                CurrentNestPlacements(),
-                spacing,
-                allowAabbOverlap: UsesTrueShapeNest(),
-                partInPartSlots: _partInPartSlots);
-            gateOk = gate.Ok;
+            gateOk = CheckNestExportGate(CurrentNestPlacements()).Ok;
         }
         var engineLabel = _nest.Engine switch
         {
@@ -3544,7 +3534,7 @@ public partial class MainWindow : Window
         };
         NestReportMeta.Text =
             (_session.ManufacturingDirty
-                ? "材料已改 · 摆位仍是旧的 · 改完后点「重新密排」\n"
+                ? "板件已改 · 当前摆位仍可用（手摆也算）· 导出会按摆位重算刀路\n"
                 : "") +
             $"利用率 {util:0.0}%\n" +
             $"大板 {sheets} 张 · 已排 {_nest.Placements.Count} · 待用 {_nestHolding.Count} · 未排 {_nest.Unplaced.Count}\n" +
@@ -4233,6 +4223,28 @@ public partial class MainWindow : Window
         }
     }
 
+    void RefreshDirtyBanner()
+    {
+        if (DirtyBanner is null) return;
+        if (_selected is null || !_session.ManufacturingDirty)
+        {
+            DirtyBanner.Visibility = Visibility.Collapsed;
+            DirtyBanner.Text = "";
+            return;
+        }
+        DirtyBanner.Text = "板件已改 · 手摆或重排均可 · 导出会按当前摆位重算刀路";
+        DirtyBanner.Visibility = Visibility.Visible;
+    }
+
+    int CountUnplacedPanels()
+    {
+        if (_session.Package is null || _nest is not { Ok: true })
+            return 0;
+        var placed = _nest.Placements.Select(p => p.PanelId)
+            .ToHashSet(StringComparer.Ordinal);
+        return _session.Package.Panels.Count(p => !placed.Contains(p.PanelId));
+    }
+
     void RefreshGeomRail()
     {
         FeatList.Items.Clear();
@@ -4252,10 +4264,7 @@ public partial class MainWindow : Window
             $"{box.W:0.#} × {box.H:0.#} × {_selected.ThicknessMm:0.#} mm\n" +
             $"材料={_selected.Material ?? "—"} · 面={orient?.MillingFace ?? _selected.Side ?? "—"} · 木纹={_selected.GrainDirection ?? "—"}\n" +
             $"features: {_selected.Features.Count} · 画布拖拽编辑";
-        DirtyBanner.Text = _session.ManufacturingDirty
-            ? "Nest/CAM 已失效 — 请重新密排后再导出"
-            : "";
-        DirtyBanner.Visibility = _session.ManufacturingDirty ? Visibility.Visible : Visibility.Collapsed;
+        RefreshDirtyBanner();
         if (PanelEdit.IsSmallPanel(_selected, out var smallReason))
         {
             SmallPanelWarn.Text = $"小板警告：{smallReason}";
@@ -5436,29 +5445,16 @@ public partial class MainWindow : Window
                 }
             }
 
-            var collisions = NestValidator.FindPolygonCollisions(
-                _session.Package.Panels,
-                CurrentNestPlacements(),
-                spacing,
-                PipIgnorePairs());
-            foreach (var c in collisions)
+            var gate = CheckNestExportGate(CurrentNestPlacements());
+            foreach (var err in gate.Errors.Where(e => e.StartsWith("poly_gap", StringComparison.Ordinal)))
             {
                 _nest.Warnings.Add(new NestWarningMsg
                 {
                     Code = "poly_gap",
-                    Message = $"polygon spacing/collision {c.PanelIdA} × {c.PanelIdB} on sheet {c.SheetIndex}",
-                    PanelIdA = c.PanelIdA,
-                    PanelIdB = c.PanelIdB,
-                    SheetIndex = c.SheetIndex,
+                    Message = err,
                 });
             }
 
-            var gate = NestExportGate.Check(
-                _session.Package.Panels,
-                CurrentNestPlacements(),
-                spacing,
-                allowAabbOverlap: UsesTrueShapeNest(),
-                partInPartSlots: _partInPartSlots);
             if (!gate.Ok)
             {
                 foreach (var err in gate.Errors.Take(12))
@@ -6455,31 +6451,36 @@ public partial class MainWindow : Window
 
     bool GuardExportPreflight(IReadOnlyList<ExportNcFile>? files = null)
     {
-        if (_session.ManufacturingDirty || _nest is not { Ok: true })
+        if (_nest is not { Ok: true, Placements.Count: > 0 })
         {
             MessageBox.Show(this,
-                "板件已编辑，或尚未完成有效密排。\n请重新密排并生成刀路后再导出。",
-                "Nest/CAM 已失效",
+                "还没有大板上的摆位。\n请密排，或把板拖到大板上后再导出。",
+                "没有摆位",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return false;
         }
 
+        var unplaced = CountUnplacedPanels();
+        if (unplaced > 0)
+        {
+            var go = MessageBox.Show(this,
+                $"还有 {unplaced} 块未上板，导出只会带已经摆上的板。\n继续导出吗？",
+                "部分未排",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (go != MessageBoxResult.Yes) return false;
+        }
+
         if (_session.Package is not null)
         {
-            var clearance = ParseMm(NestSpacingBox.Text, 12);
             var places = CurrentNestPlacements();
             if (files is { Count: > 0 })
             {
                 var sheets = files.Select(f => f.SheetIndex).ToHashSet();
                 places = places.Where(p => sheets.Contains(p.SheetIndex)).ToList();
             }
-            var nestGate = NestExportGate.Check(
-                _session.Package.Panels,
-                places,
-                clearance,
-                allowAabbOverlap: UsesTrueShapeNest(),
-                partInPartSlots: _partInPartSlots);
+            var nestGate = CheckNestExportGate(places);
             if (!nestGate.Ok)
             {
                 MessageBox.Show(this,
@@ -6493,6 +6494,9 @@ public partial class MainWindow : Window
         }
 
         RebuildOpsOverlay();
+        _session.MarkManufacturingClean();
+        RefreshDirtyBanner();
+        RefreshNestReport(full: false);
         var report = RunPreflight(files, allSheets: files is null);
         RefreshPreflightMeta();
         if (report.Ok) return true;
@@ -8465,7 +8469,39 @@ public partial class MainWindow : Window
         if (_activeNestSheet >= 0 && _activeNestSheet < _nestSheetsUsed.Count
             && _nestSheetsUsed[_activeNestSheet].SpacingMm > 0)
             return _nestSheetsUsed[_activeNestSheet].SpacingMm;
+        return NestFallbackClearanceMm();
+    }
+
+    double NestFallbackClearanceMm()
+    {
+        if (_stockKinds.Count > 0)
+            return _stockKinds.Min(k => k.SpacingMm);
         return ParseMm(NestSpacingBox.Text, 12);
+    }
+
+    IReadOnlyDictionary<int, double>? NestSheetClearances()
+    {
+        if (_nestSheetsUsed.Count == 0) return null;
+        var map = new Dictionary<int, double>();
+        for (var i = 0; i < _nestSheetsUsed.Count; i++)
+        {
+            if (_nestSheetsUsed[i].SpacingMm > 0)
+                map[i] = _nestSheetsUsed[i].SpacingMm;
+        }
+        return map.Count == 0 ? null : map;
+    }
+
+    (bool Ok, IReadOnlyList<string> Errors) CheckNestExportGate(IReadOnlyList<NestPlacement> places)
+    {
+        if (_session.Package is null)
+            return (true, []);
+        return NestExportGate.Check(
+            _session.Package.Panels,
+            places,
+            NestFallbackClearanceMm(),
+            allowAabbOverlap: UsesTrueShapeNest(),
+            partInPartSlots: _partInPartSlots,
+            sheetClearanceMm: NestSheetClearances());
     }
 
     (double Ox, double Oy)? FindFreeSlotOnSheet(
