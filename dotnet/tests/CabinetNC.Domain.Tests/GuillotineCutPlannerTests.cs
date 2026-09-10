@@ -150,8 +150,34 @@ public class GuillotineCutPlannerTests
         var lCut = Assert.Single(plan.Cuts);
         Assert.Equal("L", lCut.Kind);
         Assert.Equal(3, lCut.Polyline.Count);
+        // Hug the nest (500,500) and run to the near edges — not the empty far corner.
+        Assert.Equal((500, 0), lCut.Polyline[0]);
+        Assert.Equal((500, 500), lCut.Polyline[1]);
+        Assert.Equal((0, 500), lCut.Polyline[2]);
         Assert.All(plan.Pieces, p => Assert.True(p.MinEdgeMm >= 400 - 1e-6));
         Assert.Single(GuillotineCutPlanner.ToCutOps(plan, 0, 1220, 2440, 18, 10));
+    }
+
+    [Fact]
+    public void PlanSheet_L_hugs_nest_when_used_is_top_right()
+    {
+        var panel = Rect("A", 460, 460);
+        var places = new[]
+        {
+            new NestPlacement
+            {
+                PanelId = "A", SheetIndex = 0,
+                OffsetX = 740, OffsetY = 1960, RotationDeg = 0,
+            },
+        };
+        var plan = GuillotineCutPlanner.PlanSheet(
+            [panel], places, 0, 1220, 2440, clearanceMm: 20, minRemnantEdgeMm: 400);
+
+        Assert.NotNull(plan);
+        var lCut = Assert.Single(plan!.Cuts, c => c.Kind == "L");
+        Assert.Equal((720, 2440), lCut.Polyline[0]);
+        Assert.Equal((720, 1940), lCut.Polyline[1]);
+        Assert.Equal((1220, 1940), lCut.Polyline[2]);
     }
 
     [Fact]
@@ -238,7 +264,7 @@ public class GuillotineCutPlannerTests
         var plan = new GuillotineCutPlanner.Result
         {
             Kind = "L",
-            Polyline = [(500, 2440), (500, 500), (1220, 500)],
+            Polyline = [(500, 0), (500, 500), (0, 500)],
             RemnantAreaMm2 = 1,
             RemnantMinEdgeMm = 500,
             Label = "L切",
@@ -258,6 +284,6 @@ public class GuillotineCutPlannerTests
         var cut = afterPlunge[..retract];
         Assert.DoesNotContain("G0 Z", cut);
         Assert.Contains("Y500.0000", cut);
-        Assert.Contains("X1225.0000", cut);
+        Assert.Contains("X-5.0000", cut);
     }
 }

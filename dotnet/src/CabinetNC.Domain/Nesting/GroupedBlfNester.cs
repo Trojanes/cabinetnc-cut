@@ -265,6 +265,40 @@ public static class NestExportGate
     public static double EffectiveClearance(double nestSpacingMm, double slackMm = SpacingSlackMm) =>
         Math.Max(0, nestSpacingMm - Math.Max(0, slackMm));
 
+    /// <summary>
+    /// Export-time gate: spacing / collision / mixed-group on the sheets being written.
+    /// Does not require every package panel to appear in <paramref name="placements"/> —
+    /// partial nest is already a confirm, and a sheet/kind export must not treat
+    /// other groups as unplaced.
+    /// </summary>
+    public static (bool Ok, IReadOnlyList<string> Errors) CheckForExport(
+        IReadOnlyList<Panel> panels,
+        IReadOnlyList<NestPlacement> placements,
+        double clearanceMm,
+        IReadOnlyCollection<int>? exportSheetIndexes = null,
+        bool allowAabbOverlap = false,
+        IReadOnlyList<PartInPartSlot>? partInPartSlots = null,
+        IReadOnlyDictionary<int, double>? sheetClearanceMm = null,
+        double slackMm = SpacingSlackMm)
+    {
+        IReadOnlyList<NestPlacement> scoped = placements;
+        if (exportSheetIndexes is { Count: > 0 })
+            scoped = placements.Where(p => exportSheetIndexes.Contains(p.SheetIndex)).ToList();
+
+        if (scoped.Count == 0)
+            return (false, ["nest_empty: 无排版结果"]);
+
+        return Check(
+            panels,
+            scoped,
+            clearanceMm,
+            requirePlacements: false,
+            allowAabbOverlap: allowAabbOverlap,
+            partInPartSlots: partInPartSlots,
+            sheetClearanceMm: sheetClearanceMm,
+            slackMm: slackMm);
+    }
+
     public static (bool Ok, IReadOnlyList<string> Errors) Check(
         IReadOnlyList<Panel> panels,
         IReadOnlyList<NestPlacement> placements,

@@ -388,6 +388,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.S)
+        {
+            OnSaveProjectAsClick(sender, e);
+            e.Handled = true;
+            return;
+        }
+
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {
             switch (e.Key)
@@ -6098,7 +6105,7 @@ public partial class MainWindow : Window
         if (!ConfirmDiscardUnsavedWork("打开另一个工程")) return;
         var dlg = new OpenFileDialog
         {
-            Filter = "OmniCam project|project.db;*.db|All|*.*",
+            Filter = "OmniCam 工程 (*.db)|*.db|所有文件|*.*",
             Title = "打开工程",
         };
         if (dlg.ShowDialog() != true) return;
@@ -6332,8 +6339,13 @@ public partial class MainWindow : Window
 
     void OnSaveProjectClick(object sender, RoutedEventArgs e) => TrySaveProjectInteractive();
 
-    /// <summary>Save dialog + write; false when the operator cancelled or nothing is loaded.</summary>
-    bool TrySaveProjectInteractive()
+    void OnSaveProjectAsClick(object sender, RoutedEventArgs e) => TrySaveProjectInteractive(forceDialog: true);
+
+    /// <summary>
+    /// Write the open project. Uses the current .db when one is known; otherwise (or when
+    /// <paramref name="forceDialog"/>) shows Save As. False if cancelled or nothing is loaded.
+    /// </summary>
+    bool TrySaveProjectInteractive(bool forceDialog = false)
     {
         if (_session.Package is null || string.IsNullOrWhiteSpace(_session.PackageJson))
         {
@@ -6341,17 +6353,34 @@ public partial class MainWindow : Window
             return false;
         }
 
-        var defaultName = ExportNaming.FileStem(_session.ResolvedProjectName) + ".db";
-        var dlg = new SaveFileDialog
+        string? path = !forceDialog && !string.IsNullOrWhiteSpace(_session.ProjectDbPath)
+            ? _session.ProjectDbPath
+            : null;
+        if (path is null)
         {
-            Filter = "OmniCam project|project.db;*.db|SQLite|*.db",
-            FileName = defaultName,
-            Title = "保存工程",
-        };
-        if (!string.IsNullOrEmpty(_session.ProjectDbPath))
-            dlg.InitialDirectory = Path.GetDirectoryName(_session.ProjectDbPath);
-        if (dlg.ShowDialog() != true) return false;
+            var defaultName = !string.IsNullOrWhiteSpace(_session.ProjectDbPath)
+                ? Path.GetFileName(_session.ProjectDbPath)
+                : ExportNaming.FileStem(_session.ResolvedProjectName) + ".db";
+            var dlg = new SaveFileDialog
+            {
+                Filter = "OmniCam 工程 (*.db)|*.db|所有文件|*.*",
+                DefaultExt = "db",
+                AddExtension = true,
+                FileName = defaultName,
+                Title = forceDialog ? "工程另存为" : "保存工程",
+                OverwritePrompt = true,
+            };
+            if (!string.IsNullOrEmpty(_session.ProjectDbPath))
+                dlg.InitialDirectory = Path.GetDirectoryName(_session.ProjectDbPath);
+            if (dlg.ShowDialog() != true) return false;
+            path = dlg.FileName;
+        }
 
+        return WriteProject(path);
+    }
+
+    bool WriteProject(string path)
+    {
         var nestJson = _nest is { Ok: true }
             ? SqliteProjectStore.SerializeNest(_nest.Placements.Select(p => new NestPlacementDto
             {
@@ -6365,13 +6394,13 @@ public partial class MainWindow : Window
 
         var session = CaptureProjectSession();
         var name = string.IsNullOrWhiteSpace(_session.ProjectName)
-            ? Path.GetFileNameWithoutExtension(dlg.FileName)
+            ? Path.GetFileNameWithoutExtension(path)
             : _session.ResolvedProjectName;
         _session.ProjectName = name;
         SyncProjectNameBox();
         try
         {
-            _store.Save(dlg.FileName, new ProjectDocument
+            _store.Save(path, new ProjectDocument
             {
                 Name = name,
                 PackageJson = _session.PackageJson!,
@@ -6388,22 +6417,22 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             // Locked file, full disk, read-only USB stick: report and keep the session (still unsaved).
-            UsageLog.LogActionResult("project.save", new Dictionary<string, object?> { ["path"] = dlg.FileName }, error: ex.Message);
+            UsageLog.LogActionResult("project.save", new Dictionary<string, object?> { ["path"] = path }, error: ex.Message);
             SetStatus($"保存工程失败：{ex.Message}", StatusKind.Error);
-            ShowToast("工程没有保存", $"{Path.GetFileName(dlg.FileName)}：{ex.Message}\n换一个位置再试；当前工作仍在窗口里。", StatusKind.Error);
+            ShowToast("工程没有保存", $"{Path.GetFileName(path)}：{ex.Message}\n换一个位置再试；当前工作仍在窗口里。", StatusKind.Error);
             return false;
         }
-        _session.SetProjectDbPath(dlg.FileName);
+        _session.SetProjectDbPath(path);
         _session.MachineId = SelectedMachineId();
         _session.LabelerMachineId = SelectedLabelerMachineId();
-        RememberRecentFile(dlg.FileName, "project");
+        RememberRecentFile(path, "project");
         MarkWorkSaved();
-        SetStatus($"已保存工程 → {dlg.FileName}");
+        SetStatus($"已保存工程 → {path}");
         UsageLog.LogActionResult("project.save", new Dictionary<string, object?>
         {
             ["ok"] = true,
-            ["path"] = dlg.FileName,
-            ["panelCount"] = _session.Package.Panels.Count,
+            ["path"] = path,
+            ["panelCount"] = _session.Package!.Panels.Count,
             ["hasNest"] = nestJson is not null,
             ["opCount"] = _opsOverlay.Count,
             ["bridgeCount"] = _profileBridges.Count,
@@ -6475,14 +6504,28 @@ public partial class MainWindow : Window
         if (_session.Package is not null)
         {
             var places = CurrentNestPlacements();
-            if (files is { Count: > 0 })
-            {
-                var sheets = files.Select(f => f.SheetIndex).ToHashSet();
-                places = places.Where(p => sheets.Contains(p.SheetIndex)).ToList();
-            }
-            var nestGate = CheckNestExportGate(places);
+            IReadOnlyCollection<int>? sheets = files is { Count: > 0 }
+                ? files.Select(f => f.SheetIndex).ToHashSet()
+                : null;
+            var nestGate = NestExportGate.CheckForExport(
+                _session.Package.Panels,
+                places,
+                NestFallbackClearanceMm(),
+                exportSheetIndexes: sheets,
+                allowAabbOverlap: UsesTrueShapeNest(),
+                partInPartSlots: _partInPartSlots,
+                sheetClearanceMm: NestSheetClearances());
             if (!nestGate.Ok)
             {
+                UsageLog.LogActionResult("export.nestGate", new Dictionary<string, object?>
+                {
+                    ["ok"] = false,
+                    ["sheetFilter"] = sheets?.ToArray(),
+                    ["placeCount"] = places.Count,
+                    ["fileCount"] = files?.Count ?? 0,
+                    ["errors"] = nestGate.Errors.Take(20).ToList(),
+                    ["files"] = files?.Select(f => f.FileName).ToArray(),
+                }, error: string.Join("; ", nestGate.Errors.Take(8)));
                 MessageBox.Show(this,
                     "密排间距/碰撞/混组硬门未通过，禁止导出：\n\n" +
                     string.Join("\n", nestGate.Errors.Take(20)),

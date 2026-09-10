@@ -263,7 +263,7 @@ public static class GuillotineCutPlanner
         {
             if (right < minE - 1e-6 || top < minE - 1e-6) return false;
             AddL(lay, right, top, uMaxX + right * 0.35, uMaxY + top * 0.35,
-                [(uMaxX, sheetH), (uMaxX, uMaxY), (sheetW, uMaxY)],
+                [(uMaxX, 0), (uMaxX, uMaxY), (0, uMaxY)],
                 right * sheetH + uMaxX * top);
         }
         TryAddRect(lay, uMaxX, bot, uMaxX * 0.5, bot * 0.5, minE, HCut(0, uMinY, uMaxX, uMaxX, bot));
@@ -301,7 +301,7 @@ public static class GuillotineCutPlanner
         {
             if (left < minE - 1e-6 || top < minE - 1e-6) return false;
             AddL(lay, left, top, uMinX * 0.5, uMaxY + top * 0.35,
-                [(uMinX, sheetH), (uMinX, uMaxY), (0, uMaxY)],
+                [(uMinX, 0), (uMinX, uMaxY), (sheetW, uMaxY)],
                 left * sheetH + (sheetW - uMinX) * top);
         }
         TryAddRect(lay, sheetW - uMinX, bot, uMinX + (sheetW - uMinX) * 0.5, bot * 0.5, minE,
@@ -340,7 +340,7 @@ public static class GuillotineCutPlanner
         {
             if (right < minE - 1e-6 || bot < minE - 1e-6) return false;
             AddL(lay, right, bot, uMaxX + right * 0.35, bot * 0.5,
-                [(uMaxX, 0), (uMaxX, uMinY), (sheetW, uMinY)],
+                [(uMaxX, sheetH), (uMaxX, uMinY), (0, uMinY)],
                 right * sheetH + uMaxX * bot);
         }
         TryAddRect(lay, uMaxX, top, uMaxX * 0.5, uMaxY + top * 0.5, minE, HCut(0, uMaxY, uMaxX, uMaxX, top));
@@ -378,7 +378,7 @@ public static class GuillotineCutPlanner
         {
             if (left < minE - 1e-6 || bot < minE - 1e-6) return false;
             AddL(lay, left, bot, uMinX * 0.5, bot * 0.5,
-                [(uMinX, 0), (uMinX, uMinY), (0, uMinY)],
+                [(uMinX, sheetH), (uMinX, uMinY), (sheetW, uMinY)],
                 left * sheetH + (sheetW - uMinX) * bot);
         }
         TryAddRect(lay, midRight, top, uMinX + midRight * 0.5, uMaxY + top * 0.5, minE,
@@ -645,7 +645,8 @@ public static class GuillotineCutPlanner
         double sheetH,
         double minE)
     {
-        // Four L orientations: cut hugs the used AABB corner and runs out to two sheet edges.
+        // Four L orientations: cut hugs the used AABB and runs to the near
+        // sheet edges so the nest rectangle is isolated and the large L remains.
         // Remnant must have both arm thicknesses ≥ minE.
         void Add(
             string corner,
@@ -666,13 +667,13 @@ public static class GuillotineCutPlanner
             });
         }
 
-        // Used bottom-left → remnant is top+right L (outside used max corner)
+        // Used bottom-left → remnant is top+right L
         {
             var armW = sheetW - uMaxX;
             var armH = sheetH - uMaxY;
             var area = armW * sheetH + uMaxX * armH;
             Add("右上", armW, armH,
-                [(uMaxX, sheetH), (uMaxX, uMaxY), (sheetW, uMaxY)],
+                [(uMaxX, 0), (uMaxX, uMaxY), (0, uMaxY)],
                 area);
         }
         // Used bottom-right → remnant top+left
@@ -681,7 +682,7 @@ public static class GuillotineCutPlanner
             var armH = sheetH - uMaxY;
             var area = armW * sheetH + (sheetW - uMinX) * armH;
             Add("左上", armW, armH,
-                [(uMinX, sheetH), (uMinX, uMaxY), (0, uMaxY)],
+                [(uMinX, 0), (uMinX, uMaxY), (sheetW, uMaxY)],
                 area);
         }
         // Used top-left → remnant bottom+right
@@ -690,7 +691,7 @@ public static class GuillotineCutPlanner
             var armH = uMinY;
             var area = armW * sheetH + uMaxX * armH;
             Add("右下", armW, armH,
-                [(uMaxX, 0), (uMaxX, uMinY), (sheetW, uMinY)],
+                [(uMaxX, sheetH), (uMaxX, uMinY), (0, uMinY)],
                 area);
         }
         // Used top-right → remnant bottom+left
@@ -699,7 +700,7 @@ public static class GuillotineCutPlanner
             var armH = uMinY;
             var area = armW * sheetH + (sheetW - uMinX) * armH;
             Add("左下", armW, armH,
-                [(uMinX, 0), (uMinX, uMinY), (0, uMinY)],
+                [(uMinX, sheetH), (uMinX, uMinY), (sheetW, uMinY)],
                 area);
         }
     }
