@@ -27,5 +27,17 @@ Outputs under `dist/`:
 | `CabinetNC.FusionPackage` | JSON import of existing cut-package |
 | `CabinetNC.Application` | `ProjectSession` |
 | `CabinetNC.Infrastructure` | stub (SQLite later) |
+| `CabinetNC.Cloud.Contracts` | cloud routes + job manifest shared by Omni / OmniLight / CabLab |
+| `CabinetNC.Cloud.Client` | `%ProgramData%\Omni\cloud.json`, HTTP client, job zip, machine-folder placement |
+| `CabinetNC.CloudApi` | `omni-api` on Cloud Run (`/v1/health`, `/v1/version`) |
+
+## Cloud API deploy
+
+```powershell
+gcloud auth login
+powershell -ExecutionPolicy Bypass -File dotnet/scripts/deploy-cloud-api.ps1 -ProjectId <project-id> -WriteLocalConfig
+```
+
+Default region `australia-southeast1`; pass `-Region` to move. The script prints the service URL and, with `-WriteLocalConfig`, writes it into `cloud.json`.
 
 No commits from the desktop loop — iterate in-tree.
