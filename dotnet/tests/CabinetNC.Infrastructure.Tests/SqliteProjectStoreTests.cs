@@ -242,6 +242,42 @@ public class SqliteProjectStoreTests
                         LeftoverYMm = 800,
                     },
                 ],
+                RecutPending =
+                [
+                    new RecutPendingDto
+                    {
+                        Id = "RC-1",
+                        SourcePanelId = "P1",
+                        PanelJson = pkgJson,
+                        Title = "P1",
+                        Material = "oak",
+                        ThicknessMm = 18,
+                        WidthMm = 10,
+                        LengthMm = 10,
+                    },
+                ],
+                RecutRemnants =
+                [
+                    new RecutRemnantDto
+                    {
+                        Id = "REM-1",
+                        Material = "oak",
+                        ThicknessMm = 18,
+                        WidthMm = 800,
+                        LengthMm = 800,
+                        Source = "drawn",
+                        Note = "手画 L",
+                        Outline =
+                        [
+                            new XyDto { X = 0, Y = 0 },
+                            new XyDto { X = 800, Y = 0 },
+                            new XyDto { X = 800, Y = 400 },
+                            new XyDto { X = 400, Y = 400 },
+                            new XyDto { X = 400, Y = 800 },
+                            new XyDto { X = 0, Y = 800 },
+                        ],
+                    },
+                ],
             };
             store.Save(db, new ProjectDocument
             {
@@ -266,6 +302,15 @@ public class SqliteProjectStoreTests
             Assert.True(stock.UseLeftoverPieces);
             Assert.Equal(600, stock.LeftoverXMm);
             Assert.Equal(800, stock.LeftoverYMm);
+            var pending = Assert.Single(round.RecutPending);
+            Assert.Equal("P1", pending.SourcePanelId);
+            Assert.Equal(pkgJson, pending.PanelJson);
+            var remnant = Assert.Single(round.RecutRemnants);
+            Assert.Equal("drawn", remnant.Source);
+            Assert.Equal(800, remnant.WidthMm);
+            Assert.Equal(800, remnant.LengthMm);
+            Assert.Equal(6, remnant.Outline!.Count);
+            Assert.Equal(400, remnant.Outline[3].X);
         }
         finally
         {

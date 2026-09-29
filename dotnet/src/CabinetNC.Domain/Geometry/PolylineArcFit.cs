@@ -75,21 +75,32 @@ public static class PolylineArcFit
     {
         var list = new List<Seg>();
         var prev = start;
-        var arcStart = start;
+        var mergedSweep = 0d;
         foreach (var s in segs)
         {
+            // Sweep of this piece on its own (each fitted piece is ≤ 180°, so the
+            // minor-arc centre TryCenter picks is the right one).
+            var pieceSweep = s.Arc && TryCenter(prev, (s.X, s.Y), s.R, s.Cw, out var pcx, out var pcy)
+                ? SweepDeg(prev, (s.X, s.Y), pcx, pcy, s.Cw)
+                : 0;
+
+            // OSAI R-word arcs are ≤ 180° (R > 0 is the minor arc). Merging two 165°
+            // halves of a lobe used to pass this gate because the sweep was re-derived
+            // from the merged chord with the minor-arc centre — 331° read as 29° — and
+            // the control then cut the 29° short way across the lobe. Accumulate the
+            // real sweep instead (CabinetNC.Verify pocket_floor_uncut caught this).
             if (s.Arc && list.Count > 0 && list[^1].Arc
                 && list[^1].Cw == s.Cw
                 && Math.Abs(list[^1].R - s.R) < 0.08
-                && TryCenter(arcStart, (s.X, s.Y), s.R, s.Cw, out var cx, out var cy)
-                && SweepDeg(arcStart, (s.X, s.Y), cx, cy, s.Cw) <= 180.5)
+                && mergedSweep + pieceSweep <= 180.5)
             {
                 list[^1] = s with { R = list[^1].R };
+                mergedSweep += pieceSweep;
                 prev = (s.X, s.Y);
                 continue;
             }
-            arcStart = prev;
             list.Add(s);
+            mergedSweep = pieceSweep;
             prev = (s.X, s.Y);
         }
         return list;

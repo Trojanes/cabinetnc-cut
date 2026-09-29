@@ -33,11 +33,15 @@ public static class GrooveClear
     public static PocketClearer.PocketClearResult? TryClear(
         PanelFeature f,
         double toolDiameterMm,
-        LocalBounds? panelBounds = null)
+        LocalBounds? panelBounds = null,
+        bool force = false,
+        double? stepoverMm = null)
     {
         var width = ResolveWidthMm(f);
-        if (!NeedsClear(width, toolDiameterMm))
+        if (!force && !NeedsClear(width, toolDiameterMm))
             return null;
+        if (force && !(width > toolDiameterMm + 0.05))
+            return null; // narrower than the tool: a centreline pass is already the full cut
         var outline = Outline(f, width);
         if (outline.Count < 3)
         {
@@ -53,6 +57,7 @@ public static class GrooveClear
             Outline = outline,
             ToolDiameterMm = toolDiameterMm,
             PanelBounds = panelBounds,
+            StepoverMm = stepoverMm,
         });
     }
 }
