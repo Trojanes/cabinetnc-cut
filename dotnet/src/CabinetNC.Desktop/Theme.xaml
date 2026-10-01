@@ -105,6 +105,8 @@
     <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="ToolTipService.InitialShowDelay" Value="0" />
+    <Setter Property="ToolTipService.BetweenShowDelay" Value="0" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
     <Setter Property="SnapsToDevicePixels" Value="True" />
@@ -342,7 +344,7 @@
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="Padding" Value="10,7" />
     <Setter Property="FontSize" Value="12" />
-    <Setter Property="HasDropShadow" Value="True" />
+    <Setter Property="HasDropShadow" Value="False" />
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ToolTip">

@@ -6,6 +6,8 @@ portable/
 *.log
 .env
 .env.*
+cloud.json
+cloud.local.json
 
 # Native build outputs
 native/cabinetnc_core/build/

@@ -14,6 +14,8 @@ public class ViewportMathTests
         // Tall sheet in a wide canvas: height is the limiting dimension for both.
         Assert.Equal((1200 - 88) / 2440f * 0.9f, noBay, 5);
         Assert.Equal(0, ViewportMath.FitScale(2000, 1200, 0, 2440, 0, 44));
+        Assert.Equal(0, ViewportMath.FitScale(2000, 1200, float.NaN, 2440, 0, 44));
+        Assert.Equal(0, ViewportMath.FitScale(2000, 1200, float.PositiveInfinity, 2440, 0, 44));
     }
 
     [Fact]

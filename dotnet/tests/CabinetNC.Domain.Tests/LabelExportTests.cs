@@ -144,7 +144,7 @@ public class LabelExportTests
                 Points = [new(0, 0), new(417, 0), new(417, 400), new(0, 400)],
             },
         };
-        Assert.Equal("白点 DS", LabelExport.ShopStockShort(panel));
+        Assert.Equal("White Stipple DS", LabelExport.ShopStockShort(panel));
         Assert.Equal("19'6 Rear Door", LabelExport.ShopProject(panel, "Bedroom Style 3"));
         Assert.Equal("Kitchen OHC-D1", LabelExport.ShopPartTitle(panel));
     }
@@ -171,7 +171,7 @@ public class LabelExportTests
             projectFallback: "19'6 Rear Door");
         Assert.Equal("OHC OH BP", pastes[0].Title);
         Assert.Equal("Bedroom Style 3", pastes[0].Project);
-        Assert.Equal("木纹 SS", pastes[0].Material);
+        Assert.Equal("Wood Grain SS", pastes[0].Material);
         Assert.Equal(15, pastes[0].ThicknessMm);
         Assert.Equal(400, pastes[0].WidthMm, 1);
         Assert.Equal(300, pastes[0].HeightMm, 1);

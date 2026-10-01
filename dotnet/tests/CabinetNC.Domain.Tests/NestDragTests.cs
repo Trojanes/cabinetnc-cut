@@ -254,4 +254,63 @@ public class NestDragTests
         Assert.Equal(220, ox2, 6);
         Assert.Equal(140, oy2, 6);
     }
+
+    static Panel Named(string id, double w, double h) => new()
+    {
+        PanelId = id,
+        ThicknessMm = 18,
+        Outline = new Outline { Points = [new(0, 0), new(w, 0), new(w, h), new(0, h)] },
+    };
+
+    [Fact]
+    public void FindNearestPose_moves_off_a_neighbour_to_the_closest_gap()
+    {
+        var a = Named("A", 200, 100);
+        var b = Named("B", 300, 300);
+        var byId = new Dictionary<string, Panel>(StringComparer.Ordinal) { ["A"] = a, ["B"] = b };
+        var others = new[] { ("B", 0, 100.0, 100.0, 0.0) };
+        var moving = new NestDrag.SlideMember[] { new("A", a, 0, 0, 0) };
+        var inset = SheetInsets.Uniform(15);
+
+        // Dropped on top of B, nearer its right edge: B spans x 100..400 → 400 + 12 spacing.
+        var hit = NestDrag.FindNearestPose(
+            moving, "A", 350, 150, 0, others, byId, 1200, 2400, 12, inset);
+        Assert.True(hit.Found);
+        Assert.Equal(412, hit.Ox, 1);
+        Assert.Equal(150, hit.Oy, 1);
+        Assert.True(NestDrag.PoseFits(moving, "A", hit.Ox, hit.Oy, 0, others, byId, 1200, 2400, 12, inset));
+    }
+
+    [Fact]
+    public void FindNearestPose_reports_no_room_when_the_sheet_is_full()
+    {
+        var a = Named("A", 200, 100);
+        var wall = Named("W", 1170, 2370);
+        var byId = new Dictionary<string, Panel>(StringComparer.Ordinal) { ["A"] = a, ["W"] = wall };
+        var others = new[] { ("W", 0, 15.0, 15.0, 0.0) };
+        var moving = new NestDrag.SlideMember[] { new("A", a, 0, 0, 0) };
+
+        var miss = NestDrag.FindNearestPose(
+            moving, "A", 500, 500, 0, others, byId, 1200, 2400, 12, SheetInsets.Uniform(15));
+        Assert.False(miss.Found);
+    }
+
+    [Fact]
+    public void FindNearestPose_fits_a_long_part_only_when_turned()
+    {
+        var a = Named("A", 2300, 600);
+        var byId = new Dictionary<string, Panel>(StringComparer.Ordinal) { ["A"] = a };
+        var moving = new NestDrag.SlideMember[] { new("A", a, 0, 0, 0) };
+
+        var flat = NestDrag.FindNearestPose(
+            moving, "A", 0, 0, 0, [], byId, 1200, 2400, 12, SheetInsets.Uniform(15));
+        Assert.False(flat.Found);
+
+        var turned = new NestDrag.SlideMember[] { new("A", a, 0, 0, 90) };
+        var upright = NestDrag.FindNearestPose(
+            turned, "A", 0, 0, 0, [], byId, 1200, 2400, 12, SheetInsets.Uniform(15));
+        Assert.True(upright.Found);
+        Assert.Equal(15, upright.Ox, 1);
+        Assert.Equal(15, upright.Oy, 1);
+    }
 }

@@ -60,6 +60,14 @@ enum DynField
 
 public sealed record DraftStockKind(string Material, double ThicknessMm, string Label);
 
+/// <summary>One job panel offered as the starting shape for a recut draft.</summary>
+public sealed class DraftSourceChoice
+{
+    public required string PanelId { get; init; }
+    public required string Label { get; init; }
+    public required Panel Panel { get; init; }
+}
+
 public sealed class RemnantDraftResult
 {
     public required IReadOnlyList<Point2> Outline { get; init; }
@@ -108,6 +116,10 @@ public partial class PanelDraftWindow : Window
     Panel? _seed;
     bool _editMode;
     bool _remnantMode;
+    bool _recutCreate;
+    bool _suppressSource;
+    string? _loadedSourceId;
+    string? _loadedSourceTitle;
     DraftChain? _pendingFeature;
     bool _waitDepth;
     double? _lastFeatureDepth;
@@ -116,6 +128,8 @@ public partial class PanelDraftWindow : Window
     public Panel? ResultPanel { get; private set; }
     public RemnantDraftResult? ResultRemnant { get; private set; }
     public bool Confirmed { get; private set; }
+    /// <summary>Job panel the recut draft was drawn from. Set only after <see cref="PrepareRecutCreate"/>.</summary>
+    public string? SourcePanelId { get; private set; }
 
     public PanelDraftWindow()
     {
@@ -152,6 +166,64 @@ public partial class PanelDraftWindow : Window
             ["material"] = material,
             ["thicknessMm"] = thicknessMm,
         });
+    }
+
+    /// <summary>
+    /// 补板库创建: pick which job panel this piece belongs to. The canvas stays empty.
+    /// </summary>
+    public void PrepareRecutCreate(IReadOnlyList<DraftSourceChoice> sources, string newPanelId)
+    {
+        _recutCreate = true;
+        _editMode = false;
+        _remnantMode = false;
+        _seed = null;
+        Title = "创建待补件";
+        if (CommitBtn is not null) CommitBtn.Content = "加入待补件";
+        if (DraftSourceBar is not null)
+            DraftSourceBar.Visibility = Visibility.Visible;
+        DraftIdBox.Text = newPanelId;
+        var list = sources.ToList();
+        _suppressSource = true;
+        DraftSourceCombo.ItemsSource = list;
+        DraftSourceCombo.SelectedIndex = list.Count > 0 ? 0 : -1;
+        _suppressSource = false;
+        if (DraftSourceCombo.SelectedItem is DraftSourceChoice choice)
+            ApplySource(choice);
+        UsageLog.LogEvent("ui", "draft.open", new Dictionary<string, object?>
+        {
+            ["mode"] = "recutCreate",
+            ["panelId"] = newPanelId,
+            ["sourceCount"] = list.Count,
+            ["sourcePanelId"] = SourcePanelId,
+        });
+    }
+
+    void OnDraftSourceChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_suppressSource || !_recutCreate) return;
+        if (DraftSourceCombo.SelectedItem is not DraftSourceChoice choice) return;
+        if (choice.PanelId == _loadedSourceId) return;
+        ApplySource(choice);
+    }
+
+    /// <summary>Material and name follow the chosen panel. Drawn geometry is left alone.</summary>
+    void ApplySource(DraftSourceChoice choice)
+    {
+        SourcePanelId = choice.PanelId;
+        _loadedSourceId = choice.PanelId;
+        _seed = choice.Panel;
+        var title = choice.Panel.DisplayTitle;
+        var autoName = string.IsNullOrWhiteSpace(title) ? choice.PanelId : title;
+        var keepName = _loadedSourceTitle is not null
+            && !string.Equals((DraftNameBox.Text ?? "").Trim(), _loadedSourceTitle, StringComparison.Ordinal);
+        if (!keepName)
+        {
+            DraftNameBox.Text = autoName;
+            _loadedSourceTitle = autoName;
+        }
+
+        var thk = choice.Panel.ThicknessMm > 0 ? choice.Panel.ThicknessMm : 18;
+        SelectKind(choice.Panel.Material, thk);
     }
 
     public void LockKind()
@@ -344,9 +416,13 @@ public partial class PanelDraftWindow : Window
             ["name"] = result.Panel.DisplayTitle,
             ["material"] = result.Panel.Material,
             ["thicknessMm"] = result.Panel.ThicknessMm,
+            ["w"] = Math.Round(CabinetNC.Domain.Nesting.NestDrag.SizeRotated(result.Panel, 0).W, 1),
+            ["l"] = Math.Round(CabinetNC.Domain.Nesting.NestDrag.SizeRotated(result.Panel, 0).H, 1),
             ["featureCount"] = result.Panel.Features.Count,
             ["figureCount"] = figures.Count,
             ["editMode"] = _editMode,
+            ["recut"] = _recutCreate,
+            ["sourcePanelId"] = SourcePanelId,
         });
         ResultPanel = result.Panel;
         Confirmed = true;

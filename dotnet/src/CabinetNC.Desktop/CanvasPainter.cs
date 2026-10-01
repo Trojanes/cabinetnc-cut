@@ -1,4 +1,5 @@
 using CabinetNC.Compute.Contracts;
+using CabinetNC.Desktop.Core;
 using CabinetNC.Domain.Geometry;
 using CabinetNC.Domain.Manufacturing;
 using CabinetNC.Domain.Nesting;
@@ -221,7 +222,11 @@ static class CanvasPainter
         var scale = opts.Scale;
         var sw = opts.SheetW;
         var sh = opts.SheetH;
-        if (scale <= 0) return;
+        // NaN/Infinity reach Skia as a native crash and never hit the managed error dialog.
+        if (!(scale > 0) || !float.IsFinite(scale)
+            || !float.IsFinite(sw) || !float.IsFinite(sh) || sw <= 0 || sh <= 0
+            || !float.IsFinite(ox) || !float.IsFinite(oy))
+            return;
 
         float ToSx(double x) => ox + (float)x * scale;
         float ToSy(double y) => oy + (sh - (float)y) * scale;
@@ -242,7 +247,12 @@ static class CanvasPainter
         DrawDimHScreen(canvas, ToSx(0), ToSx(sw), ToSy(sh) - 14, Fmt(sw));
         DrawDimVScreen(canvas, ToSy(0), ToSy(sh), ToSx(0) - 8, Fmt(sh));
 
-        var byId = panels.ToDictionary(p => p.PanelId);
+        var byId = new Dictionary<string, Panel>(StringComparer.Ordinal);
+        foreach (var panel in panels)
+        {
+            if (!string.IsNullOrEmpty(panel.PanelId))
+                byId[panel.PanelId] = panel;
+        }
         var sheetIdx = Math.Max(0, opts.ActiveSheetIndex);
         var selectedIds = opts.SelectedIds;
         var drawList = placements.Where(p => p.SheetIndex == sheetIdx).ToList();
@@ -274,6 +284,7 @@ static class CanvasPainter
             }
 
             using var path = BuildWorldPath(panel, place, ox, oy, scale, sh);
+            if (path is null) continue;
             using var fill = new SKPaint { Color = fillC, IsAntialias = true };
             using var stroke = new SKPaint { Color = strokeC, IsStroke = true, StrokeWidth = lw, IsAntialias = true };
             canvas.DrawPath(path, fill);
@@ -339,7 +350,7 @@ static class CanvasPainter
                 var shortName = string.IsNullOrWhiteSpace(panel.DisplayPartName)
                     ? panel.DisplayTitle
                     : panel.DisplayPartName;
-                var label = locked ? $"[锁] {shortName}" : shortName;
+                var label = locked ? UiText.T($"[锁] {shortName}") : shortName;
                 label = EllipsizeToWidth(label, Math.Max(12f, partW), fontSize, bold: active);
                 DrawText(canvas, label, lx, ly, fontSize,
                     active ? new SKColor(0x00, 0x66, 0xCC) : new SKColor(0x22, 0x22, 0x22),
@@ -1105,6 +1116,7 @@ static class CanvasPainter
             RotationDeg = rotDeg,
         };
         using var path = BuildWorldPath(panel, place, pad, pad, scale, sheetH);
+        if (path is null) return;
         var fillC = blocked
             ? new SKColor(0xCC, 0x33, 0x33, 0x55)
             : new SKColor(0x00, 0x66, 0xCC, 0x55);
@@ -1149,7 +1161,7 @@ static class CanvasPainter
         }
     }
 
-    public static SKPath BuildWorldPath(
+    public static SKPath? BuildWorldPath(
         Panel panel, NestPlacementMsg place, float padX, float padY, float scale, float sheetH)
     {
         var path = new SKPath();
@@ -1162,8 +1174,18 @@ static class CanvasPainter
                 place.OffsetX, place.OffsetY, place.RotationDeg);
             var x = padX + (float)wx * scale;
             var y = padY + (sheetH - (float)wy) * scale;
+            if (!float.IsFinite(x) || !float.IsFinite(y))
+            {
+                path.Dispose();
+                return null;
+            }
             if (first) { path.MoveTo(x, y); first = false; }
             else path.LineTo(x, y);
+        }
+        if (first)
+        {
+            path.Dispose();
+            return null;
         }
         path.Close();
         return path;
@@ -1192,12 +1214,29 @@ static class CanvasPainter
 
     static void DrawSheetGrid(SKCanvas canvas, float ox, float oy, float scale, float sw, float sh)
     {
+        if (!float.IsFinite(ox) || !float.IsFinite(oy) || !(scale > 0) || !float.IsFinite(scale)
+            || !float.IsFinite(sw) || !float.IsFinite(sh) || sw <= 0 || sh <= 0)
+            return;
         using var paint = new SKPaint { Color = new SKColor(0xE8, 0xE8, 0xE8), IsStroke = true, StrokeWidth = 1 };
         const float step = 50;
-        for (float x = 0; x <= sw; x += step)
-            canvas.DrawLine(ox + x * scale, oy, ox + x * scale, oy + sh * scale, paint);
-        for (float y = 0; y <= sh; y += step)
-            canvas.DrawLine(ox, oy + (sh - y) * scale, ox + sw * scale, oy + (sh - y) * scale, paint);
+        // Cap the line count. A huge or non-advancing float step used to spin forever inside paint.
+        var nx = (int)Math.Min(2000, Math.Floor(sw / step));
+        var ny = (int)Math.Min(2000, Math.Floor(sh / step));
+        var right = ox + sw * scale;
+        var bottom = oy + sh * scale;
+        if (!float.IsFinite(right) || !float.IsFinite(bottom)) return;
+        for (var i = 0; i <= nx; i++)
+        {
+            var x = ox + i * step * scale;
+            canvas.DrawLine(x, oy, x, bottom, paint);
+        }
+        if (nx * step < sw - 0.5f)
+            canvas.DrawLine(right, oy, right, bottom, paint);
+        for (var i = 0; i <= ny; i++)
+        {
+            var y = oy + (sh - i * step) * scale;
+            canvas.DrawLine(ox, y, right, y, paint);
+        }
     }
 
     static void DrawBlocked(
@@ -1232,11 +1271,17 @@ static class CanvasPainter
             var top = Math.Min(y0, y1);
             var w = Math.Abs(x1 - x0);
             var h = Math.Abs(y1 - y0);
-            if (w < 0.5f || h < 0.5f) continue;
+            if (!float.IsFinite(w) || !float.IsFinite(h) || w < 0.5f || h < 0.5f) continue;
             canvas.DrawRect(left, top, w, h, fill);
             var step = Math.Max(6f, 12f * Math.Max(0.4f, scale / 2f));
-            for (var t = -h; t < w + h; t += step)
+            if (!float.IsFinite(step) || step < 1f) step = 6f;
+            var span = w + 2f * h;
+            var n = (int)Math.Min(2000, Math.Ceiling(span / step));
+            for (var i = 0; i <= n; i++)
+            {
+                var t = -h + i * step;
                 canvas.DrawLine(left + t, top, left + t + h, top + h, hatch);
+            }
             canvas.DrawRect(left, top, w, h, stroke);
         }
     }
@@ -1312,6 +1357,8 @@ static class CanvasPainter
         var right = toSx(sheetX + anchor.WidthMm * 0.5);
         var top = toSy(sheetY + anchor.HeightMm * 0.5);
         var bottom = toSy(sheetY - anchor.HeightMm * 0.5);
+        if (!float.IsFinite(left) || !float.IsFinite(right) || !float.IsFinite(top) || !float.IsFinite(bottom))
+            return;
         if (right < left) (left, right) = (right, left);
         if (bottom < top) (top, bottom) = (bottom, top);
         var rect = new SKRect(left, top, right, bottom);
@@ -1767,6 +1814,7 @@ static class CanvasPainter
 
     static void DrawText(SKCanvas canvas, string text, float x, float y, float size, SKColor color, bool bold = false)
     {
+        text = UiText.T(text);
         using var paint = new SKPaint { Color = color, IsAntialias = true };
         using var font = new SKFont(UiTypeface(bold), size);
         canvas.DrawText(text, x, y, SKTextAlign.Left, font, paint);
@@ -1801,6 +1849,7 @@ static class CanvasPainter
 
     static void DrawCentered(SKCanvas canvas, int w, int h, string text)
     {
+        text = UiText.T(text);
         using var paint = new SKPaint { Color = new SKColor(0x88, 0x88, 0x88), IsAntialias = true };
         using var font = new SKFont(UiTypeface(bold: false), 14);
         canvas.DrawText(text, w / 2f, h / 2f, SKTextAlign.Center, font, paint);

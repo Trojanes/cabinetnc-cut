@@ -64,7 +64,7 @@ public partial class ChangeMaterialWindow : Window
     {
         if (ChosenKey is null)
         {
-            MessageBox.Show(this, "请选择材料。", "改变材料", MessageBoxButton.OK, MessageBoxImage.Information);
+            UiDialog.Show(this, "请选择材料。", "改变材料", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         BlindPolicy = BlindScale.IsChecked == true

@@ -153,6 +153,20 @@
       </DockPanel>
     </Border>
 
+    <Border x:Name="DraftSourceBar" DockPanel.Dock="Top" Background="#242424" BorderBrush="#111111"
+            BorderThickness="0,0,0,1" Padding="10,6" Visibility="Collapsed">
+      <DockPanel>
+        <TextBlock Text="参照板件" Foreground="#8A8A8A" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0" />
+        <ComboBox x:Name="DraftSourceCombo" Width="420" HorizontalAlignment="Left"
+                  Style="{StaticResource CadCombo}"
+                  DisplayMemberPath="Label"
+                  SelectionChanged="OnDraftSourceChanged"
+                  ToolTip="选哪一块板。只带它的材料，画布保持空白。" />
+        <TextBlock Text="画布是空的。材料跟这块板，画出新外形后加入待补件。原方案不动。" Foreground="#9A9A9A" FontSize="12"
+                   VerticalAlignment="Center" Margin="12,0,0,0" />
+      </DockPanel>
+    </Border>
+
     <Border x:Name="EditToolBar" DockPanel.Dock="Top" Background="#222222" BorderBrush="#111111"
             BorderThickness="0,0,0,1" Padding="8,4" Visibility="Collapsed">
       <DockPanel>

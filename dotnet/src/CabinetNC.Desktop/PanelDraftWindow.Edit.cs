@@ -1135,7 +1135,7 @@ public partial class PanelDraftWindow
     {
         if (!_editorOn || Confirmed || _editOriginal is null || _editPanel is null) return true;
         if (PanelEdit.ClassifyChange(_editOriginal, _editPanel) == EditImpact.None) return true;
-        var ans = MessageBox.Show(this,
+        var ans = UiDialog.Show(this,
             $"有 {_editUndo.Count} 步改动还没写回方案。\n\n是 = 写回并关闭\n否 = 丢弃改动\n取消 = 继续编辑",
             "编辑板件", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         if (ans == MessageBoxResult.Cancel) return false;

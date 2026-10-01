@@ -360,7 +360,7 @@ public partial class MainWindow
         RecutActionHint.Text = InRecutMode
             ? "补切模式：生产加工里现在是待补件和余料。切完（或不切了）点「返回原方案」。"
             : _recutPending.Count == 0
-                ? "先在密排页右键板件「加入待补件」。"
+                ? "先加入待补件：点「创建板件」画出新外形，或在密排页右键板件。"
                 : _recutRemnants.Count == 0
                     ? "没有余料也能补切：放不下时会问要不要开整板。"
                     : "先排余料，放不下再问要不要开整板；原方案会先暂存。";
@@ -594,7 +594,7 @@ public partial class MainWindow
     void OnRecutRemnantClearClick(object sender, RoutedEventArgs e)
     {
         if (_recutRemnants.Count == 0) return;
-        if (MessageBox.Show(this, $"清空这份工程的 {_recutRemnants.Count} 块余料？", "清空余料",
+        if (UiDialog.Show(this, $"清空这份工程的 {_recutRemnants.Count} 块余料？", "清空余料",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
         var n = _recutRemnants.Count;
@@ -602,6 +602,107 @@ public partial class MainWindow
         UsageLog.LogEvent("ui", "recut.remnant.clear", new Dictionary<string, object?> { ["count"] = n });
         SetStatus("余料已清空");
         RefreshRecutLibraryUi();
+    }
+
+    void OnRecutPendingCreateClick(object sender, RoutedEventArgs e)
+    {
+        if (_session.Package is null)
+        {
+            SetStatus("请先载入方案");
+            return;
+        }
+
+        var sources = RecutSourcePanels();
+        if (sources.Count == 0)
+        {
+            SetStatus("方案里没有板件，无法创建待补件", StatusKind.Warning);
+            return;
+        }
+
+        var dupes = sources
+            .GroupBy(p => p.DisplayTitle)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        var choices = sources.Select(p => new DraftSourceChoice
+        {
+            PanelId = p.PanelId,
+            Label = dupes.Contains(p.DisplayTitle)
+                ? $"{p.DisplayTitle}  {p.DisplayDetail}  {p.PanelId}"
+                : $"{p.DisplayTitle}  {p.DisplayDetail}",
+            Panel = p,
+        }).ToList();
+
+        var kinds = RecutDraftKinds();
+        foreach (var p in sources)
+        {
+            var thk = p.ThicknessMm > 0 ? p.ThicknessMm : 18;
+            var mat = p.Material ?? "";
+            if (kinds.Any(k =>
+                    string.Equals(k.Material, mat, StringComparison.OrdinalIgnoreCase)
+                    && Math.Abs(k.ThicknessMm - thk) < 0.05))
+                continue;
+            kinds.Add(new DraftStockKind(mat, thk, p.MaterialGroupLabel));
+        }
+
+        var first = sources[0];
+        var dlg = new PanelDraftWindow { Owner = this };
+        dlg.SetStockKinds(kinds, first.Material, first.ThicknessMm > 0 ? first.ThicknessMm : 18);
+        dlg.PrepareRecutCreate(choices, NextRecutDraftPanelId(sources));
+        if (dlg.ShowDialog() != true || dlg.ResultPanel is null) return;
+
+        var panel = dlg.ResultPanel.WithQuantity(1);
+        var sourceId = string.IsNullOrWhiteSpace(dlg.SourcePanelId) ? panel.PanelId : dlg.SourcePanelId;
+        _recutPending.Add(new RecutPendingItem
+        {
+            Id = NextRecutId("RC"),
+            SourcePanelId = sourceId,
+            Panel = panel,
+            AddedAt = DateTimeOffset.Now.ToString("o"),
+        });
+        UsageLog.LogEvent("ui", "recut.pending.create", new Dictionary<string, object?>
+        {
+            ["panelId"] = panel.PanelId,
+            ["sourcePanelId"] = sourceId,
+            ["name"] = panel.DisplayTitle,
+            ["material"] = panel.Material,
+            ["thicknessMm"] = panel.ThicknessMm,
+            ["pendingCount"] = _recutPending.Count,
+        });
+        SetStatus($"已加入待补件 · {panel.DisplayTitle} · 共 {_recutPending.Count} 件 · 点「补切密排」一起排到余料上",
+            StatusKind.Success);
+        RefreshRecutLibraryUi();
+    }
+
+    /// <summary>Job panels to draw from. In recut mode the live package is the pending set, so use the parked original.</summary>
+    List<PanelPart> RecutSourcePanels()
+    {
+        if (_recutSnapshot is not null)
+        {
+            var original = CutPackageImporter.FromJson(_recutSnapshot.Doc.PackageJson).Package;
+            if (original is { Panels.Count: > 0 })
+                return original.Panels.ToList();
+        }
+        return _session.Package?.Panels.ToList() ?? [];
+    }
+
+    string NextRecutDraftPanelId(IReadOnlyList<PanelPart> sources)
+    {
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_session.Package is not null)
+        {
+            foreach (var p in _session.Package.Panels)
+                taken.Add(p.PanelId);
+        }
+        foreach (var p in _recutPending)
+            taken.Add(p.Panel.PanelId);
+        foreach (var p in sources)
+            taken.Add(p.PanelId);
+        var n = 1;
+        string id;
+        do { id = $"DRAFT-{n++}"; }
+        while (!taken.Add(id));
+        return id;
     }
 
     void OnRecutPendingRemoveClick(object sender, RoutedEventArgs e)
@@ -621,7 +722,7 @@ public partial class MainWindow
     void OnRecutPendingClearClick(object sender, RoutedEventArgs e)
     {
         if (_recutPending.Count == 0) return;
-        if (MessageBox.Show(this, $"清空这份工程的 {_recutPending.Count} 件待补件？", "清空待补件",
+        if (UiDialog.Show(this, $"清空这份工程的 {_recutPending.Count} 件待补件？", "清空待补件",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
         var n = _recutPending.Count;
@@ -648,7 +749,7 @@ public partial class MainWindow
         }
         if (_recutPending.Count == 0)
         {
-            SetStatus("没有待补件 · 密排页右键板件「加入待补件」", StatusKind.Warning);
+            SetStatus("没有待补件 · 点「创建板件」，或在密排页右键「加入待补件」", StatusKind.Warning);
             return;
         }
         if (_nestBusy) return;
@@ -764,7 +865,7 @@ public partial class MainWindow
     /// <summary>Ctrl+S while recutting: the recut nest is never written; the parked original is.</summary>
     bool ConfirmLeaveRecutForSave()
     {
-        var r = MessageBox.Show(this,
+        var r = UiDialog.Show(this,
             "补切模式下的密排不会保存到工程。\n\n返回原方案再保存吗？（待补件和余料会一起保存）",
             "保存工程",
             MessageBoxButton.YesNo,
@@ -888,7 +989,7 @@ public partial class MainWindow
                     var full = FullSheetFor(g.Key);
                     return $"  {KindLabelFor(g.Key, g.First().Material)}：{g.Count()} 件 → 整板 {full.WidthMm:0.#}×{full.LengthMm:0.#}";
                 });
-                var ask = MessageBox.Show(this,
+                var ask = UiDialog.Show(this,
                     $"还有 {packed.Unplaced.Count} 件放不下现有余料：\n\n{string.Join("\n", lines)}\n\n要各加一张整板再排吗？",
                     "余料不够",
                     MessageBoxButton.YesNo,

@@ -12,10 +12,14 @@ public static class ViewportMath
     /// </summary>
     public static float FitScale(float canvasW, float canvasH, float sheetW, float sheetH, float bayW, float pad)
     {
+        if (!float.IsFinite(canvasW) || !float.IsFinite(canvasH)
+            || !float.IsFinite(sheetW) || !float.IsFinite(sheetH)
+            || !float.IsFinite(bayW) || !float.IsFinite(pad))
+            return 0;
         if (sheetW <= 0 || sheetH <= 0) return 0;
         var availW = Math.Max(1f, canvasW - bayW - pad);
         var fit = Math.Min(availW / sheetW, (canvasH - 2 * pad) / sheetH) * 0.9f;
-        return fit > 0 ? fit : 0;
+        return float.IsFinite(fit) && fit > 0 ? fit : 0;
     }
 
     /// <summary>

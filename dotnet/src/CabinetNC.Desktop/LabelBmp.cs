@@ -195,4 +195,67 @@ static class LabelBmp
         }
         return bytes;
     }
+
+    /// <summary>
+    /// Sheet preview for the label folder (<c>W*.bmp</c> large, <c>T*.bmp</c> small), drawn like the
+    /// shop samples: landscape, length to the right, width downward, program origin top-left.
+    /// That is a rotation of the nest view, not a mirror.
+    /// </summary>
+    public static byte[] RenderSheetPreview(
+        double widthMm,
+        double lengthMm,
+        string title,
+        IReadOnlyList<CutOp> ops,
+        int longSidePx)
+    {
+        var sheetW = widthMm > 1 ? widthMm : 1220;
+        var sheetL = lengthMm > 1 ? lengthMm : 2440;
+        var longSide = Math.Max(sheetW, sheetL);
+        var scale = longSidePx / longSide;
+        var w = Math.Max(48, (int)Math.Round(sheetL * scale));
+        var h = Math.Max(24, (int)Math.Round(sheetW * scale));
+        const int caption = 28;
+        using var bmp = new SKBitmap(w + 16, h + caption + 16, SKColorType.Bgra8888, SKAlphaType.Opaque);
+        using var canvas = new SKCanvas(bmp);
+        canvas.Clear(SKColors.White);
+        var ox = 8f;
+        var oy = 8f + caption;
+        using (var border = new SKPaint { Color = SKColors.Black, IsStroke = true, StrokeWidth = 2, IsAntialias = false })
+            canvas.DrawRect(ox, oy, w, h, border);
+        using (var fill = new SKPaint { Color = new SKColor(230, 230, 230), IsStroke = false, IsAntialias = false })
+        using (var edge = new SKPaint { Color = SKColors.Black, IsStroke = true, StrokeWidth = 1, IsAntialias = false })
+        {
+            foreach (var op in ops)
+            {
+                if (op.Op != "contour" || !string.IsNullOrWhiteSpace(op.FeatureId) || op.Path is not { Count: >= 3 } path)
+                    continue;
+                using var poly = new SKPath();
+                var first = true;
+                foreach (var p in path)
+                {
+                    var x = ox + (float)(p.Y / sheetL * w);
+                    var y = oy + (float)(p.X / sheetW * h);
+                    if (first)
+                    {
+                        poly.MoveTo(x, y);
+                        first = false;
+                    }
+                    else
+                        poly.LineTo(x, y);
+                }
+                poly.Close();
+                canvas.DrawPath(poly, fill);
+                canvas.DrawPath(poly, edge);
+            }
+        }
+        var captionText = string.IsNullOrWhiteSpace(title) ? "" : title.Trim();
+        if (captionText.Length > 0)
+        {
+            using var paint = new SKPaint { Color = SKColors.Black, IsAntialias = false };
+            using var font = new SKFont(UiTypeface(false), Math.Clamp(caption * 0.62f, 10, 18));
+            canvas.DrawText(captionText, ox, caption - 6, SKTextAlign.Left, font, paint);
+        }
+        canvas.Flush();
+        return ToBmp1(bmp);
+    }
 }

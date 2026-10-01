@@ -101,12 +101,14 @@ public static class LabelExport
     public static string ShopProject(Panel panel, string? fallback = null)
     {
         var pkg = panel.DisplayPackage;
-        if (string.IsNullOrWhiteSpace(pkg) || pkg is "方案")
+        if (string.IsNullOrWhiteSpace(pkg) || pkg is "方案" or "未命名工程")
             pkg = fallback?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(pkg) || pkg is "方案" or "未命名工程")
+            return "Untitled";
         return pkg;
     }
 
-    /// <summary>Short stock for 60 mm paper, e.g. <c>白点 DS</c>. Thickness lives on the size line.</summary>
+    /// <summary>Short stock for 60 mm paper, e.g. <c>White Stipple DS</c>. Thickness lives on the size line.</summary>
     public static string ShopStockShort(Panel panel)
     {
         var color = ShortColor(panel.DisplayColor);
@@ -133,20 +135,7 @@ public static class LabelExport
         if (string.IsNullOrWhiteSpace(color)
             || color.Equals("Unassigned", StringComparison.OrdinalIgnoreCase))
             return "";
-        var key = color.Replace(" ", "", StringComparison.Ordinal)
-            .Replace("-", "", StringComparison.Ordinal)
-            .Replace("_", "", StringComparison.Ordinal)
-            .ToLowerInvariant();
-        return key switch
-        {
-            "whitestipple" => "白点",
-            "woodgrain" => "木纹",
-            "doorwoodgrain" or "doorwoodgrain16" => "木纹",
-            "forestgreen" => "森绿",
-            "metallicwhite" => "金属白",
-            "glosswhite" => "亮白",
-            _ => color.Trim(),
-        };
+        return color.Trim();
     }
 
     public static string SafeStem(string? raw, int max = StemMaxLen)

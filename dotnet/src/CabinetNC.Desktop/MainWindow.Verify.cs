@@ -58,6 +58,12 @@ public partial class MainWindow
     /// </summary>
     bool GuardExportVerify(ref List<ExportNcFile> files, out IReadOnlyDictionary<string, VerifyReport> reports)
     {
+        // The verifier replays OSAI programs. The Syntec file is a different dialect.
+        if (IsSyntecPost())
+        {
+            reports = new Dictionary<string, VerifyReport>(StringComparer.Ordinal);
+            return true;
+        }
         reports = VerifyExportFiles(files);
         if (reports.Values.All(r => r.Ok))
         {
@@ -97,7 +103,7 @@ public partial class MainWindow
         LogVerify(reports, files, ok: false, rounds: 0, overrides: overrides);
         var text = string.Join("\n\n", failed.Select(f =>
             $"{f.Key}\n" + VerifyReport.Format(new VerifyReport { Ok = false, Issues = f.Value.Errors.Take(12).ToList() })));
-        MessageBox.Show(this,
+        UiDialog.Show(this,
             "计码验算未通过，禁止导出（G-code 与板件形状不符）：\n\n" + text +
             "\n\n已尝试自动收紧工艺仍未通过。验算不可跳过，请修正特征/刀具后重新计算。",
             "计码验算",
@@ -162,7 +168,7 @@ public partial class MainWindow
             ["rounds"] = ex.Trail.Count,
             ["codes"] = ex.Report.Issues.Select(i => i.Code).Distinct().ToArray(),
         }, error: string.Join("; ", ex.Report.Errors.Select(i => i.Code).Distinct().Take(8)));
-        MessageBox.Show(this,
+        UiDialog.Show(this,
             $"计码验算未通过（S{ex.Report.SheetIndex + 1}），禁止打包：\n\n" +
             VerifyReport.Format(new VerifyReport { Ok = false, Issues = ex.Report.Errors.Take(12).ToList() }) +
             (ex.Trail.Count > 1 ? $"\n\n已自动尝试 {ex.Trail.Count} 轮工艺收紧仍未通过。" : "") +

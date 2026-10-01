@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/CabinetNC.Application/CabinetNC.Application.csproj" />
+    <Project Path="src/CabinetNC.CloudApi/CabinetNC.CloudApi.csproj" />
     <Project Path="src/CabinetNC.Compute.Contracts/CabinetNC.Compute.Contracts.csproj" />
     <Project Path="src/CabinetNC.ComputeWorker/CabinetNC.ComputeWorker.csproj" />
     <Project Path="src/CabinetNC.Desktop.Core/CabinetNC.Desktop.Core.csproj" />

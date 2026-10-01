@@ -10,7 +10,9 @@
         FontFamily="Segoe UI"
         FontSize="13"
         TextOptions.TextFormattingMode="Display"
-        UseLayoutRounding="True">
+        UseLayoutRounding="True"
+        Stylus.IsPressAndHoldEnabled="False"
+        Stylus.IsFlicksEnabled="False">
   <Window.Resources>
     <Style x:Key="ColSplitter" TargetType="GridSplitter">
       <Setter Property="Width" Value="6" />
@@ -169,8 +171,10 @@
         </MenuItem>
         <Separator />
         <MenuItem Header="打开工程…" InputGestureText="Ctrl+Shift+O" Click="OnOpenProjectClick" />
+        <MenuItem Header="从云端打开…" Click="OnOpenCloudClick" />
         <MenuItem Header="保存工程" InputGestureText="Ctrl+S" Click="OnSaveProjectClick" />
         <MenuItem Header="另存为…" InputGestureText="Ctrl+Shift+S" Click="OnSaveProjectAsClick" />
+        <MenuItem Header="上传到车间…" Click="OnCloudJobsClick" />
         <Separator />
         <MenuItem Header="退出" InputGestureText="Alt+F4" Click="OnExitClick" />
       </MenuItem>
@@ -270,6 +274,8 @@
           <Button Content="打开工程…" Click="OnOpenProjectClick" ToolTip="打开保存过的工程 (.db)　(Ctrl+Shift+O)" />
           <Button Content="保存工程" Click="OnSaveProjectClick" ToolTip="写回当前工程文件；还没有文件时再选位置　(Ctrl+S)" />
           <Button Content="另存为" Click="OnSaveProjectAsClick" ToolTip="另存一份工程，不覆盖当前文件　(Ctrl+Shift+S)" />
+          <Button Content="上传到车间" Click="OnCloudJobsClick" Margin="8,0,0,0"
+                  ToolTip="把当前工程传到车间云端。程序和标签在车间导出时再生成。本地保存不会自动上传。" />
           <Button x:Name="MoreMenuBtn" AutomationProperties.Name="更多" Click="OnMoreMenuClick" Style="{StaticResource GhostButton}" Margin="2,0,0,0"
                   ToolTip="诊断与帮助">
             <StackPanel Orientation="Horizontal">
@@ -285,6 +291,8 @@
               </ContextMenu>
             </Button.ContextMenu>
           </Button>
+          <Button x:Name="LangBtn" Click="OnLanguageClick" Style="{StaticResource GhostButton}" MinWidth="44" Margin="8,0,0,0"
+                  ToolTip="Switch to English">EN</Button>
         </StackPanel>
       </Grid>
     </Border>
@@ -557,7 +565,7 @@
                             Content="创建板件" Click="OnCreatePanelClick"
                             Padding="8,2" Margin="0" FontSize="11"
                             Visibility="Collapsed"
-                            ToolTip="打开画布。已选板则载入该板，未选则新建。Profile=外框，Feature=孔/槽/口袋。" />
+                            ToolTip="打开空白画布，画出新外形后加入方案。材料跟当前选中的板。" />
                     <TextBlock Text="板件" Style="{StaticResource RailH2}"
                                Margin="0" VerticalAlignment="Center" />
                   </DockPanel>
@@ -741,11 +749,17 @@
                       </StackPanel>
                     </Grid>
                   </Border>
-                  <Button x:Name="NestCreatePanelBtn" Content="创建板件"
-                          Click="OnNestCreatePanelClick"
-                          HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                          Margin="12,0,0,36" Padding="12,6" FontWeight="SemiBold"
-                          ToolTip="按当前大板材料创建，完成后进入右侧待用区" />
+                  <StackPanel Orientation="Horizontal"
+                              HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12,0,0,36">
+                    <Button x:Name="NestCreatePanelBtn" Content="创建板件"
+                            Click="OnNestCreatePanelClick"
+                            Padding="12,6" FontWeight="SemiBold"
+                            ToolTip="按当前大板材料创建，完成后进入右侧待用区" />
+                    <Button x:Name="NestAddSheetBtn" Content="增加大板"
+                            Click="OnNestAddSheetClick"
+                            Margin="6,0,0,0" Padding="12,6" FontWeight="SemiBold"
+                            ToolTip="给当前这种板材加一张空大板，排在这一组最后" />
+                  </StackPanel>
                   <Border VerticalAlignment="Bottom" Background="#F7F7F7" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0" Padding="8,4">
                     <WrapPanel>
                       <TextBlock Text="选中" Foreground="#0066CC" FontSize="11" Margin="0,0,10,0" />
@@ -865,6 +879,7 @@
                                Style="{StaticResource SecondaryText}" TextAlignment="Center" Margin="0,0,0,18" FontSize="13" />
                     <WrapPanel HorizontalAlignment="Center">
                       <Button x:Name="EmptyLoadBtn" Content="打开方案…" Click="OnOpenClick" Style="{StaticResource PrimaryButton}" Padding="16,9" Margin="0,0,8,0" />
+                      <Button x:Name="EmptyCloudBtn" Content="从云端打开" Click="OnOpenCloudClick" Style="{StaticResource GhostButton}" Padding="14,9" Margin="0,0,8,0" />
                       <Button x:Name="EmptyDemoBtn" Content="打开示例" Click="OnLoadDemoClick" Style="{StaticResource GhostButton}" Padding="14,9" />
                     </WrapPanel>
                     <StackPanel x:Name="EmptyRecentPanel" Margin="0,18,0,0" Visibility="Collapsed" />
@@ -1492,7 +1507,7 @@
           <DockPanel>
             <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
               <TextBlock Text="补板库" Style="{StaticResource H1Text}" Margin="0,0,0,4" />
-              <TextBlock Text="这份工程要再切的板，和手上还能用的余料。密排页右键板件可加入；补切先排余料，放不下再问要不要开整板。"
+              <TextBlock Text="这份工程要再切的板，和手上还能用的余料。待补件可从密排页右键加入，或在这里创建板件、选一块参照板画出新外形。补切先排余料，放不下再问要不要开整板。"
                          Style="{StaticResource SecondaryText}" />
               <TextBlock x:Name="RecutLibMeta" Margin="0,6,0,0" FontFamily="Consolas" FontSize="12"
                          Foreground="{StaticResource TextSecondaryBrush}" />
@@ -1565,7 +1580,7 @@
                            HorizontalAlignment="Center" Margin="0,0,0,12" />
                 <TextBlock x:Name="RemnantsEmptyTitle" Text="先载入方案" Style="{StaticResource H1Text}"
                            HorizontalAlignment="Center" Margin="0,0,0,8" />
-                <TextBlock Text="补板库跟工程走。打开方案并密排后，在密排页右键板件「加入待补件」，或把还没切的整张大板「加入余料」。"
+                <TextBlock Text="补板库跟工程走。打开方案后，可在这里「创建板件」画出新外形，或在密排页右键「加入待补件」，也可以把还没切的整张大板「加入余料」。"
                            Style="{StaticResource SecondaryText}" TextAlignment="Center" FontSize="13" Margin="0,0,0,18" />
                 <Button Content="去生产加工" Click="OnGotoProductionClick" Style="{StaticResource PrimaryButton}"
                         Padding="16,9" HorizontalAlignment="Center" />
@@ -1587,11 +1602,13 @@
                     <TextBlock Text="待补板件" Style="{StaticResource H2Text}" />
                   </DockPanel>
                   <WrapPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                    <Button Content="创建板件…" Click="OnRecutPendingCreateClick" Style="{StaticResource PrimaryButton}"
+                            ToolTip="选方案里的一块板作为材料参照，在空白画布上画出新外形，加入待补件。原方案不动。" />
                     <Button Content="移除待补件" Click="OnRecutPendingRemoveClick" ToolTip="移除选中的待补件" />
                     <Button Content="清空待补件" Click="OnRecutPendingClearClick" Style="{StaticResource GhostButton}" />
                   </WrapPanel>
                   <TextBlock DockPanel.Dock="Bottom" x:Name="RecutPendingEmpty" Style="{StaticResource CaptionText}"
-                             Text="还没有待补件。密排页右键板件 →「加入待补件」。" Margin="0,6,0,0" />
+                             Text="还没有待补件。点「创建板件」选一块参照板画出新外形，或在密排页右键「加入待补件」。" Margin="0,6,0,0" />
                   <ListBox x:Name="RecutPendingList" FontSize="12" SelectionMode="Extended" MinHeight="120">
                     <ListBox.ItemTemplate>
                       <DataTemplate>
